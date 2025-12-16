@@ -1,10 +1,7 @@
 FROM python:3.11-slim
 
-# Instalar dependencias del sistema (Tesseract OCR y dependencias de compilación)
+# Instalar dependencias del sistema (Poppler para PDF y tzdata para zona horaria)
 RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    tesseract-ocr-spa \
-    libtesseract-dev \
     poppler-utils \
     gcc \
     libpq-dev \

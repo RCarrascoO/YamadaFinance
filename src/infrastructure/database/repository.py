@@ -10,16 +10,16 @@ class ReceiptRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def save_receipt(self, user_id: int, raw_text: str, image_path: str, file_hash: str = None) -> ReceiptModel:
-        # Intentar extraer el monto total automáticamente
-        parsed_total = ReceiptParser.extract_total(raw_text)
+    def save_receipt(self, user_id: int, raw_text: str, image_path: str, file_hash: str = None, total_amount: float = None) -> ReceiptModel:
+        # Si Gemini ya nos dio el total, lo usamos. Si no, intentamos parsear.
+        final_total = total_amount if total_amount is not None else ReceiptParser.extract_total(raw_text)
         
         db_receipt = ReceiptModel(
             user_id=user_id,
             raw_text=raw_text,
             image_path=image_path,
             file_hash=file_hash,
-            total_amount=parsed_total # Guardamos el monto detectado
+            total_amount=final_total
         )
         self.db.add(db_receipt)
         self.db.commit()

@@ -856,44 +856,52 @@ async def execute_ocr_and_save(file_path: str, file_hash: str, update: Update, c
     chat_id = update.effective_chat.id
     
     try:
-        # Procesar OCR
+        # Procesar OCR con Gemini
         await context.bot.send_message(chat_id=chat_id, text="👀 ¡A ver, a ver! Déjame leer esto con mis lentes especiales... 🧐")
-        text = ocr_service.extract_text(file_path)
         
-        if not text.strip():
-            await context.bot.send_message(chat_id=chat_id, text="Uhm... está un poco borroso 😵‍💫. No pude leer nada, ¿podrías intentarlo de nuevo con una foto más clara? 🙏")
+        # Ahora extract_data devuelve un diccionario (JSON)
+        data = ocr_service.extract_data(file_path)
+        
+        if "error" in data:
+            await context.bot.send_message(chat_id=chat_id, text=f"Uhm... tuve un problema leyendo la imagen: {data['error']} 😵‍💫")
             return
 
+        # Extraer datos del JSON
+        merchant = data.get("merchant")
+        total_amount = data.get("total_amount")
+        category = data.get("category")
+        raw_text = data.get("raw_text", "")
+        items = data.get("items", [])
+        
         # Guardar en BD
         user_id = update.effective_user.id
         db_gen = get_db()
         db = next(db_gen)
         repo = ReceiptRepository(db)
         
-        # Intentar detectar marca conocida
-        detected_merchant = repo.find_known_merchant(text)
+        # Guardar boleta con los datos estructurados
+        # Nota: save_receipt original no aceptaba merchant/category directos, hay que actualizar repository.py
+        # O usar update después. Por ahora, usaremos save_receipt modificado (ver paso siguiente)
+        receipt = repo.save_receipt(
+            user_id=user_id, 
+            raw_text=raw_text, 
+            image_path=file_path, 
+            file_hash=file_hash,
+            total_amount=total_amount
+        )
         
-        receipt = repo.save_receipt(user_id=user_id, raw_text=text, image_path=file_path, file_hash=file_hash)
-        
-        # Si detectamos marca, la guardamos y buscamos su categoría frecuente
-        if detected_merchant:
-            repo.update_merchant(receipt.id, detected_merchant)
-            
-            # Auto-categorización basada en historial
-            predicted_category = repo.get_most_common_category_for_merchant(detected_merchant)
-            if predicted_category:
-                repo.update_category(receipt.id, predicted_category)
-                await context.bot.send_message(
-                    chat_id=chat_id, 
-                    text=f"✨ **¡Eureka!** Recuerdo que **{detected_merchant}** suele ser **{predicted_category}**. \nAsí que lo asigné por ti. ¡Soy rápida, eh! 😉⚡",
-                    parse_mode='Markdown'
-                )
+        if merchant:
+            repo.update_merchant(receipt.id, merchant)
+        if category:
+            repo.update_category(receipt.id, category)
         
         # Mostrar opciones de la boleta
         await show_receipt_options(update, context, receipt.id)
 
     except Exception as e:
         logging.error(f"Error ejecutando OCR: {e}")
+        error_msg = get_random_error_message(str(e))
+        await context.bot.send_message(chat_id=chat_id, text=error_msg)
         error_msg = get_random_error_message(str(e))
         await context.bot.send_message(chat_id=chat_id, text=error_msg)
 
