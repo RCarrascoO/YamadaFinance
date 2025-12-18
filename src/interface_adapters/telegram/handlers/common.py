@@ -219,7 +219,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• **Suscripciones:** Gestiona tus pagos recurrentes (Netflix, Spotify, etc).\n"
         "• **Recordatorios:** Pídeme que te recuerde cosas importantes.\n"
         "• **Reportes:** Gráficos y resúmenes para ver a dónde va tu dinero.\n\n"
-        "⚠️ **Nota:** Aún estoy entrenando (**BETA 4**), así que tenme un poquito de paciencia, ¿sí? 😉\n"
+        "⚠️ **Nota:** Aún estoy entrenando (**BETA 5**), así que tenme un poquito de paciencia, ¿sí? 😉\n"
         "💡 **Feedback:** Si ves algo raro o tienes ideas, ¡cuéntame! Me ayuda mucho a mejorar.\n\n"
         "¡Vamos allá! Selecciona una opción 👇"
     )
