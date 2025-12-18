@@ -28,6 +28,9 @@ from interface_adapters.telegram.handlers.budgets import (
 from interface_adapters.telegram.handlers.subscriptions import (
     subscriptions_menu, handle_subscription_callbacks, handle_subscription_text_input
 )
+from interface_adapters.telegram.handlers.reminders import (
+    handle_reminder_callbacks, reminders_menu, ReminderActions
+)
 from interface_adapters.telegram.handlers.common import get_random_phrase, get_random_error_message
 
 # Configuración de Logging
@@ -84,10 +87,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif "Cambiar Fecha" in text:
         context.user_data.clear()
         await ask_year_selection(update, context)
-        return
-    elif text.lower() in ["hola", "hi", "hello", "buenos dias", "buenas tardes", "buenas noches", "holis"]:
-        context.user_data.clear()
-        await start(update, context)
         return
 
     # --- LÓGICA DE ESTADOS (Solo si no es un comando) ---
@@ -193,6 +192,24 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Día inválido (1-31). Intenta de nuevo.")
         return
 
+    # Verificar si estamos editando mensaje de recordatorio
+    if context.user_data.get('waiting_for_rem_edit_msg'):
+        rem_id = context.user_data.pop('waiting_for_rem_edit_msg')
+        new_msg = text.strip()
+        
+        db_gen = get_db()
+        db = next(db_gen)
+        repo = ReceiptRepository(db)
+        repo.update_reminder(rem_id, message=new_msg)
+        
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"✅ ¡Recordatorio Actualizado! 🔔\n\nNuevo mensaje: **{new_msg}**",
+            parse_mode='Markdown'
+        )
+        await reminders_menu(update, context)
+        return
+
     # Verificar si estamos esperando mensaje de recordatorio
     if context.user_data.get('waiting_for_reminder_msg'):
         context.user_data.pop('waiting_for_reminder_msg')
@@ -201,10 +218,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Ofrecer botones para fecha rápida
         keyboard = [
-            [InlineKeyboardButton("En 1 hora", callback_data="remind_1h"), InlineKeyboardButton("En 3 horas", callback_data="remind_3h")],
-            [InlineKeyboardButton("Mañana 9:00", callback_data="remind_tmrw_9"), InlineKeyboardButton("Mañana 20:00", callback_data="remind_tmrw_20")],
-            [InlineKeyboardButton("En 2 días", callback_data="remind_2d")],
-            [InlineKeyboardButton("📅 Elegir Fecha", callback_data="remind_custom_date")]
+            [InlineKeyboardButton("En 1 hora", callback_data=f"{ReminderActions.QUICK_DATE}|1h"), InlineKeyboardButton("En 3 horas", callback_data=f"{ReminderActions.QUICK_DATE}|3h")],
+            [InlineKeyboardButton("Mañana 9:00", callback_data=f"{ReminderActions.QUICK_DATE}|tmrw_9"), InlineKeyboardButton("Mañana 20:00", callback_data=f"{ReminderActions.QUICK_DATE}|tmrw_20")],
+            [InlineKeyboardButton("En 2 días", callback_data=f"{ReminderActions.QUICK_DATE}|2d")],
+            [InlineKeyboardButton("📅 Elegir Fecha", callback_data=ReminderActions.CUSTOM_DATE_PICKER)],
+            [InlineKeyboardButton("🔙 Volver", callback_data=ReminderActions.MENU)]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -235,12 +253,25 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 context.user_data['waiting_for_custom_rem_time_only'] = (day, month, year)
                 return
 
-            msg = context.user_data.get('temp_rem_msg')
             user_id = update.effective_user.id
-            
             db_gen = get_db()
             db = next(db_gen)
             repo = ReceiptRepository(db)
+
+            # Verificar si estamos editando
+            editing_id = context.user_data.get('editing_reminder_id')
+            if editing_id:
+                repo.update_reminder(editing_id, remind_at=remind_at)
+                context.user_data.pop('editing_reminder_id')
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"✅ ¡Fecha Actualizada! 🔔\n\nNueva Fecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
+                    parse_mode='Markdown'
+                )
+                await reminders_menu(update, context)
+                return
+
+            msg = context.user_data.get('temp_rem_msg')
             repo.add_reminder(user_id, msg, remind_at)
             
             await context.bot.send_message(
@@ -317,6 +348,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Intentar ingreso manual
     if await handle_manual_entry(update, context, text):
         return
+
+    # --- SALUDOS (Al final, para no interferir con inputs) ---
+    if text.lower() in ["hola", "hi", "hello", "buenos dias", "buenas tardes", "buenas noches", "holis"]:
+        context.user_data.clear()
+        await start(update, context)
+        return
         
     # Si no es nada conocido
     error_phrase = get_random_phrase("error_user")
@@ -325,34 +362,28 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         text=f"{error_phrase} No entendí eso... ¿Intentabas decirme algo o solo probabas mis botones? 🤔\nUsa el menú de abajo 👇"
     )
 
-async def reminders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Muestra el menú de recordatorios."""
-    msg = "⏰ **Tus Recordatorios**\n\n"
-    msg += "¿Necesitas que te acuerde de pagar algo o de revisar tus gastos? ¡Dime y yo te aviso! 🔔\n"
-            
-    keyboard = [
-        [InlineKeyboardButton("➕ Nuevo Recordatorio", callback_data="new_reminder")],
-        [InlineKeyboardButton("📋 Gestionar Recordatorios", callback_data="manage_reminders")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, reply_markup=reply_markup, parse_mode='Markdown')
-
 async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
+    data = query.data
+    logging.info(f"CALLBACK RECEIVED: {data}")
+
     # Delegar a handlers modulares
     if await handle_expense_callbacks(update, context):
+        logging.info("Handled by expense callbacks")
         return
     if await handle_report_callbacks(update, context):
+        logging.info("Handled by report callbacks")
         return
     if await handle_budget_callbacks(update, context):
+        logging.info("Handled by budget callbacks")
         return
     if await handle_subscription_callbacks(update, context):
+        logging.info("Handled by subscription callbacks")
         return
     
-    data = query.data
+    logging.info("Not handled by main modules, checking manual overrides...")
 
     if data.startswith("undo_sub_"):
         receipt_id = int(data.split("_")[2])
@@ -407,75 +438,13 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await subscriptions_menu(update, context)
         return
 
-    if data.startswith("new_reminder"):
-        context.user_data['waiting_for_reminder_msg'] = True
-        await query.edit_message_text(text="⏰ **Nuevo Recordatorio**\n\n¿Qué quieres que te recuerde? (Escribe el mensaje):", parse_mode='Markdown')
+    logging.info("Checking reminder callbacks...")
+    # Delegar a handlers de recordatorios
+    if await handle_reminder_callbacks(update, context):
+        logging.info("Handled by reminder callbacks")
         return
 
-    if data.startswith("manage_reminders"):
-        user_id = update.effective_user.id
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        
-        reminders = repo.get_active_reminders_for_user(user_id)
-        
-        if not reminders:
-            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="refresh_rems")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(text="📭 No tienes recordatorios pendientes.", reply_markup=reply_markup)
-            return
-            
-        keyboard = []
-        for r in reminders:
-            # Formato: DD/MM HH:MM - Mensaje corto
-            date_str = r.remind_at.strftime("%d/%m %H:%M")
-            msg_short = (r.message[:15] + '..') if len(r.message) > 15 else r.message
-            btn_text = f"{date_str} | {msg_short}"
-            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"view_rem_{r.id}")])
-            
-        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="refresh_rems")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text="📋 **Tus Recordatorios Pendientes:**\n(Toca uno para ver opciones)", reply_markup=reply_markup, parse_mode='Markdown')
-        return
-
-    if data.startswith("view_rem_"):
-        rem_id = int(data.split("_")[2])
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        rem = repo.get_reminder_by_id(rem_id)
-        
-        if not rem:
-            await query.edit_message_text(text="❌ Ese recordatorio ya no existe.")
-            return
-            
-        msg = f"⏰ **Detalle del Recordatorio**\n\n"
-        msg += f"📝 **Mensaje:** {rem.message}\n"
-        msg += f"📅 **Fecha:** {rem.remind_at.strftime('%d-%m-%Y %H:%M')}\n"
-        
-        keyboard = [
-            [InlineKeyboardButton("🗑️ Eliminar", callback_data=f"del_rem_{rem.id}")],
-            [InlineKeyboardButton("🔙 Volver", callback_data="manage_reminders")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=msg, reply_markup=reply_markup, parse_mode='Markdown')
-        return
-
-    if data.startswith("del_rem_"):
-        rem_id = int(data.split("_")[2])
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        repo.delete_reminder(rem_id)
-        
-        await query.edit_message_text(text="✅ Recordatorio eliminado.")
-        return
-
-    if data.startswith("refresh_rems"):
-        await reminders_menu(update, context)
-        return
+    logging.info("Not handled by any callback handler")
 
     # --- Lógica de Gestión de Presupuestos ---
     if data.startswith("manage_budgets"):
@@ -525,188 +494,6 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         budget_id = int(data.split("_")[2])
         context.user_data['waiting_for_budget_edit_amount'] = budget_id
         await query.edit_message_text(text="✏️ **Escribe el nuevo monto límite (ej: 200000):**", parse_mode='Markdown')
-        return
-
-    # --- Lógica de Recordatorios Rápidos ---
-    if data.startswith("remind_custom_date"):
-        # Mostrar selección de mes (Actual y Siguiente)
-        now = datetime.now()
-        next_month_date = now + timedelta(days=32)
-        next_month_date = next_month_date.replace(day=1)
-        
-        months = [
-            (now.strftime("%B"), now.month, now.year),
-            (next_month_date.strftime("%B"), next_month_date.month, next_month_date.year)
-        ]
-        
-        # Mapeo de nombres de meses a español (simple)
-        es_months = {1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"}
-        
-        keyboard = []
-        for _, m, y in months:
-            name = es_months.get(m, str(m))
-            keyboard.append([InlineKeyboardButton(f"{name} {y}", callback_data=f"pick_rem_month_{m}_{y}")])
-            
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text="📅 **Selecciona el Mes:**", reply_markup=reply_markup, parse_mode='Markdown')
-        return
-
-    if data.startswith("pick_rem_month_"):
-        parts = data.split("_")
-        month = int(parts[3])
-        year = int(parts[4])
-        
-        # Mostrar días (1-31)
-        # Simplificación: Mostramos todos los días, si el mes tiene menos, el usuario se dará cuenta o validamos después.
-        # Para hacerlo bien, calculamos días del mes.
-        if month == 12:
-            next_m = datetime(year + 1, 1, 1)
-        else:
-            next_m = datetime(year, month + 1, 1)
-        last_day = (next_m - timedelta(days=1)).day
-        
-        keyboard = []
-        row = []
-        for d in range(1, last_day + 1):
-            row.append(InlineKeyboardButton(str(d), callback_data=f"pick_rem_day_{d}_{month}_{year}"))
-            if len(row) == 7:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-            
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=f"📅 **Selecciona el Día ({month}/{year}):**", reply_markup=reply_markup, parse_mode='Markdown')
-        return
-
-    if data.startswith("pick_rem_day_"):
-        parts = data.split("_")
-        day = int(parts[3])
-        month = int(parts[4])
-        year = int(parts[5])
-        
-        # Mostrar horas (07:00 a 23:00)
-        hours = list(range(7, 24))
-        keyboard = []
-        row = []
-        for h in hours:
-            row.append(InlineKeyboardButton(f"{h}:00", callback_data=f"pick_rem_hour_{h}_{day}_{month}_{year}"))
-            if len(row) == 4:
-                keyboard.append(row)
-                row = []
-        if row:
-            keyboard.append(row)
-            
-        # Botón para hora manual
-        keyboard.append([InlineKeyboardButton("✏️ Otra Hora (Manual)", callback_data=f"rem_manual_time_{day}_{month}_{year}")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=f"⏰ **Selecciona la Hora para el {day}/{month}:**", reply_markup=reply_markup, parse_mode='Markdown')
-        return
-
-    if data.startswith("rem_manual_time_"):
-        parts = data.split("_")
-        day = int(parts[3])
-        month = int(parts[4])
-        year = int(parts[5])
-        
-        context.user_data['waiting_for_custom_rem_time_only'] = (day, month, year)
-        await query.edit_message_text(text=f"⌨️ **Escribe la hora para el {day}/{month}/{year}:**\n\nFormato: HH:MM (ej: 14:35 o 09:05)", parse_mode='Markdown')
-        return
-
-    if data.startswith("pick_rem_hour_"):
-        parts = data.split("_")
-        hour = int(parts[3])
-        day = int(parts[4])
-        month = int(parts[5])
-        year = int(parts[6])
-        
-        # Mostrar minutos
-        minutes = [0, 15, 30, 45]
-        keyboard = []
-        row = []
-        for m in minutes:
-            row.append(InlineKeyboardButton(f"{hour}:{m:02d}", callback_data=f"pick_rem_min_{m}_{hour}_{day}_{month}_{year}"))
-        keyboard.append(row)
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text=f"⏰ **Selecciona los Minutos:**", reply_markup=reply_markup, parse_mode='Markdown')
-        return
-
-    if data.startswith("pick_rem_min_"):
-        parts = data.split("_")
-        minute = int(parts[3])
-        hour = int(parts[4])
-        day = int(parts[5])
-        month = int(parts[6])
-        year = int(parts[7])
-        
-        remind_at = datetime(year, month, day, hour, minute)
-        
-        if remind_at < datetime.now():
-            await query.edit_message_text(text="❌ Esa fecha ya pasó. Intenta de nuevo.")
-            return
-
-        msg = context.user_data.get('temp_rem_msg')
-        if not msg:
-             await query.edit_message_text(text="❌ Ups, perdí el mensaje. Intenta de nuevo.")
-             return
-
-        user_id = update.effective_user.id
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        repo.add_reminder(user_id, msg, remind_at)
-        
-        # Limpiar estado
-        if 'waiting_for_reminder_date' in context.user_data:
-            context.user_data.pop('waiting_for_reminder_date')
-        
-        await query.edit_message_text(
-            text=f"✅ ¡Recordatorio Guardado! 🔔\n\n**{msg}**\nFecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
-            parse_mode='Markdown'
-        )
-        return
-
-    if data.startswith("remind_"):
-        # Obtener mensaje guardado
-        msg = context.user_data.get('temp_rem_msg')
-        if not msg:
-            await query.edit_message_text(text="❌ Ups, perdí el mensaje. Intenta de nuevo.")
-            return
-            
-        now = datetime.now()
-        remind_at = None
-        
-        if data == "remind_1h":
-            remind_at = now + timedelta(hours=1)
-        elif data == "remind_3h":
-            remind_at = now + timedelta(hours=3)
-        elif data == "remind_tmrw_9":
-            remind_at = now + timedelta(days=1)
-            remind_at = remind_at.replace(hour=9, minute=0, second=0, microsecond=0)
-        elif data == "remind_tmrw_20":
-            remind_at = now + timedelta(days=1)
-            remind_at = remind_at.replace(hour=20, minute=0, second=0, microsecond=0)
-        elif data == "remind_2d":
-            remind_at = now + timedelta(days=2)
-            remind_at = remind_at.replace(hour=9, minute=0, second=0, microsecond=0)
-            
-        if remind_at:
-            user_id = update.effective_user.id
-            db_gen = get_db()
-            db = next(db_gen)
-            repo = ReceiptRepository(db)
-            repo.add_reminder(user_id, msg, remind_at)
-            
-            # Limpiar estado
-            if 'waiting_for_reminder_date' in context.user_data:
-                context.user_data.pop('waiting_for_reminder_date')
-            
-            await query.edit_message_text(
-                text=f"✅ ¡Recordatorio Guardado! 🔔\n\n**{msg}**\nFecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
-                parse_mode='Markdown'
-            )
         return
 
     # Lógica de selección de fecha
