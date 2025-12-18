@@ -34,6 +34,8 @@ async def ask_year_selection(update: Update, context: ContextTypes.DEFAULT_TYPE)
         row.append(InlineKeyboardButton(str(year), callback_data=f"set_year_{year}"))
     keyboard.append(row)
     
+    keyboard.append([InlineKeyboardButton("🔙 Cancelar", callback_data="cancel_date_selection")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
@@ -57,6 +59,8 @@ async def ask_month_selection(update: Update, context: ContextTypes.DEFAULT_TYPE
         if (i + 1) % 4 == 0: # 4 meses por fila
             keyboard.append(row)
             row = []
+    
+    keyboard.append([InlineKeyboardButton("🔙 Volver al Año", callback_data="back_to_year_selection")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(
@@ -277,6 +281,14 @@ async def handle_report_callbacks(update: Update, context: ContextTypes.DEFAULT_
             text=f"✅ **Fecha cambiada a:** {month_name} {year}\n\nAhora los reportes mostrarán datos de este periodo.",
             parse_mode='Markdown'
         )
+        return True
+
+    if data == "cancel_date_selection":
+        await query.edit_message_text(text="❌ Selección de fecha cancelada.")
+        return True
+
+    if data == "back_to_year_selection":
+        await ask_year_selection(update, context)
         return True
         
     return False

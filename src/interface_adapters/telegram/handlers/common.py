@@ -1,5 +1,5 @@
 import random
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from infrastructure.database.repository import ReceiptRepository
 
@@ -76,34 +76,57 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_first_name = update.effective_user.first_name
-    welcome_msg = (
-        f"¡Hola {user_first_name}! Soy **Lilo** ✨\n"
-        "¡Qué alegría verte por aquí! Soy tu asistente financiera y estoy lista para poner orden en tus gastos. 🦸‍♀️📊\n\n"
-        "Mi misión es proteger tu bolsillo y ayudarte a organizar tus gastos. ¡Seré tu heroína financiera! (Y lo haré con mucho estilo 😎).\n\n"
-        "🧠 **Cerebro Potenciado:** Ahora utilizo **Gemini 2.5 Flash** para leer tus boletas con una precisión increíble. ¡Pruébame! 👁️✨\n\n"
-        "🚀 **¿En qué puedo ayudarte hoy?**\n"
-        "• **Leer Boletas:** Mándame una foto o **PDF** y yo extraigo los datos.\n"
-        "• **Ingreso Manual:** Escribe '5000 pan' y lo anoto al instante.\n"
-        "• **Presupuestos:** Define límites para no pasarte de la raya.\n"
-        "• **Suscripciones:** Gestiona tus pagos recurrentes (Netflix, Spotify, etc).\n"
-        "• **Recordatorios:** Pídeme que te recuerde cosas importantes.\n"
-        "• **Reportes:** Gráficos y resúmenes para ver a dónde va tu dinero.\n\n"
-        "⚠️ **Nota:** Aún estoy entrenando (**BETA 3**), así que tenme un poquito de paciencia, ¿sí? 😉\n"
-        "💡 **Feedback:** Si ves algo raro o tienes ideas, ¡cuéntame! Me ayuda mucho a mejorar.\n\n"
-        "¡Vamos allá! Selecciona una opción 👇"
-    )
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=welcome_msg,
-        parse_mode='Markdown'
-    )
-    await show_main_menu(update, context)
-
 async def check_easter_eggs(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
-    """Revisa si el texto contiene palabras clave y responde con personalidad."""
-    text_lower = text.lower()
+    """Verifica si el texto es un comando del menú principal o un easter egg."""
+    import logging
+    
+    text_clean = text.strip()
+    text_lower = text_clean.lower()
+    logging.info(f"Check Easter Eggs: '{text_clean}'")
+
+    # --- COMANDOS DE MENÚ ---
+    if text_clean == "💸 Gasto Rápido":
+        logging.info("Matched: Gasto Rápido")
+        keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data="cancel_manual_entry")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="¡Claro! Escribe el monto y la descripción (ej: '4500 almuerzo') 👇",
+            reply_markup=reply_markup
+        )
+        return True
+        
+    if text_clean == "📊 Reportes y Gastos":
+        from interface_adapters.telegram.handlers.reports import show_reports_menu
+        await show_reports_menu(update, context)
+        return True
+        
+    if text_clean == "📜 Mis Boletas":
+        from interface_adapters.telegram.handlers.reports import ultimos_command
+        await ultimos_command(update, context)
+        return True
+        
+    if text_clean == "💰 Presupuestos":
+        from interface_adapters.telegram.handlers.budgets import budgets_menu
+        await budgets_menu(update, context)
+        return True
+        
+    if text_clean == "🔄 Suscripciones":
+        from interface_adapters.telegram.handlers.subscriptions import subscriptions_menu
+        await subscriptions_menu(update, context)
+        return True
+        
+    if text_clean == "⏰ Recordatorios":
+        # TODO: Mover recordatorios a su propio handler
+        from infrastructure.telegram.bot import reminders_menu
+        await reminders_menu(update, context)
+        return True
+        
+    if text_clean == "❓ Ayuda":
+        await start(update, context)
+        return True
+
+    # --- EASTER EGGS ---
     
     # 1. Server / Nexus CrossWorlds
     if "server" in text_lower or "nexus" in text_lower or "crossworlds" in text_lower:
@@ -175,4 +198,34 @@ async def check_easter_eggs(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
         return True
 
+    # Easter Eggs originales (legacy check)
+    if "te amo" in text_lower:
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="😳 ¡Ay! Me sonrojé... Yo también te quiero, ¡pero como amigos financieros! 💖")
+        return True
+        
     return False
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_first_name = update.effective_user.first_name
+    welcome_msg = (
+        f"¡Hola {user_first_name}! Soy **Lilo** ✨\n"
+        "¡Qué alegría verte por aquí! Soy tu asistente financiera y estoy lista para poner orden en tus gastos. 🦸‍♀️📊\n\n"
+        "Mi misión es proteger tu bolsillo y ayudarte a organizar tus gastos. ¡Seré tu heroína financiera! (Y lo haré con mucho estilo 😎).\n\n"
+        "🧠 **Cerebro Potenciado:** Ahora utilizo **Gemini 2.5 Flash** para leer tus boletas con una precisión increíble. ¡Pruébame! 👁️✨\n\n"
+        "🚀 **¿En qué puedo ayudarte hoy?**\n"
+        "• **Leer Boletas:** Mándame una foto o **PDF** y yo extraigo los datos.\n"
+        "• **Ingreso Manual:** Escribe '5000 pan' y lo anoto al instante.\n"
+        "• **Presupuestos:** Define límites para no pasarte de la raya.\n"
+        "• **Suscripciones:** Gestiona tus pagos recurrentes (Netflix, Spotify, etc).\n"
+        "• **Recordatorios:** Pídeme que te recuerde cosas importantes.\n"
+        "• **Reportes:** Gráficos y resúmenes para ver a dónde va tu dinero.\n\n"
+        "⚠️ **Nota:** Aún estoy entrenando (**BETA 4**), así que tenme un poquito de paciencia, ¿sí? 😉\n"
+        "💡 **Feedback:** Si ves algo raro o tienes ideas, ¡cuéntame! Me ayuda mucho a mejorar.\n\n"
+        "¡Vamos allá! Selecciona una opción 👇"
+    )
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=welcome_msg,
+        parse_mode='Markdown'
+    )
+    await show_main_menu(update, context)

@@ -22,6 +22,12 @@ from interface_adapters.telegram.handlers.expenses import (
     handle_manual_entry, execute_ocr_and_save, show_receipt_options,
     process_file, handle_document, handle_photo, handle_expense_callbacks
 )
+from interface_adapters.telegram.handlers.budgets import (
+    budgets_menu, handle_budget_callbacks, handle_budget_text_input
+)
+from interface_adapters.telegram.handlers.subscriptions import (
+    subscriptions_menu, handle_subscription_callbacks, handle_subscription_text_input
+)
 from interface_adapters.telegram.handlers.common import get_random_phrase, get_random_error_message
 
 # Configuración de Logging
@@ -42,11 +48,49 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not message:
         return
     text = message.text
+    logging.info(f"Recibido mensaje de texto: '{text}'")
     
-    # Verificar Easter Eggs (Solo si no estamos esperando un input específico crítico, o lo ponemos al principio para que tenga prioridad)
-    # Lo pondremos al principio para que responda siempre a estas palabras clave
+    # Verificar Easter Eggs y Comandos de Menú
     if await check_easter_eggs(update, context, text):
+        logging.info("Handled by check_easter_eggs")
         return
+
+    # --- PRIORIDAD: Comandos de Submenús (para evitar que se tomen como input de texto) ---
+    if text == "🔙 Volver al Menú Principal" or text == "Volver al Menú Principal":
+        # Limpiar cualquier estado pendiente al volver al menú
+        context.user_data.clear()
+        await show_main_menu(update, context)
+        return
+    elif text == "📅 Gastos Mes Actual":
+        context.user_data.clear()
+        await gastos_command(update, context)
+        return
+    elif text == "📅 Gastos Año Actual":
+        context.user_data.clear()
+        await gastos_anual_command(update, context)
+        return
+    elif text == "📂 Por Categoría (Mes)":
+        context.user_data.clear()
+        await gastos_categoria_command(update, context)
+        return
+    elif "Por Marca (Mes)" in text:
+        context.user_data.clear()
+        await gastos_marca_command(update, context)
+        return
+    elif "Exportar Excel" in text:
+        context.user_data.clear()
+        await export_excel_command(update, context)
+        return
+    elif "Cambiar Fecha" in text:
+        context.user_data.clear()
+        await ask_year_selection(update, context)
+        return
+    elif text.lower() in ["hola", "hi", "hello", "buenos dias", "buenas tardes", "buenas noches", "holis"]:
+        context.user_data.clear()
+        await start(update, context)
+        return
+
+    # --- LÓGICA DE ESTADOS (Solo si no es un comando) ---
 
     # Verificar si estamos esperando el nombre de una marca
     if context.user_data.get('waiting_for_merchant'):
@@ -94,30 +138,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
         return
 
-    # Verificar si estamos esperando monto de presupuesto
-    if context.user_data.get('waiting_for_budget_cat'):
-        category = context.user_data.pop('waiting_for_budget_cat')
-        try:
-            clean_text = text.replace('$', '').replace('.', '').replace(',', '').strip()
-            amount = float(clean_text)
-            
-            user_id = update.effective_user.id
-            current_month = datetime.now().month
-            current_year = datetime.now().year
-            
-            db_gen = get_db()
-            db = next(db_gen)
-            repo = ReceiptRepository(db)
-            repo.set_budget(user_id, category, amount, current_month, current_year)
-            
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"✅ ¡Listo! Presupuesto de **{category}** fijado en **${amount:,.0f}** para este mes. 🎯",
-                parse_mode='Markdown'
-            )
-            await budgets_menu(update, context)
-        except ValueError:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Eso no es un número válido. Intenta de nuevo.")
+    # Delegar input de presupuesto
+    if await handle_budget_text_input(update, context):
+        return
+
+    # Delegar input de suscripciones
+    if await handle_subscription_text_input(update, context):
         return
 
     # Verificar si estamos esperando nombre de suscripción
@@ -288,165 +314,16 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Monto inválido. Intenta de nuevo.")
         return
 
-    # --- Gasto Rápido ---
-    if "Gasto Rápido" in text:
-        context.user_data['waiting_for_quick_expense_amount'] = True
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="💸 **Gasto Rápido**\n\n¿Cuánto gastaste? (Solo el número, ej: 5000)")
+    # Intentar ingreso manual
+    if await handle_manual_entry(update, context, text):
         return
-
-    if context.user_data.get('waiting_for_quick_expense_amount'):
-        try:
-            clean_text = text.replace('$', '').replace('.', '').replace(',', '').strip()
-            amount = float(clean_text)
-            context.user_data.pop('waiting_for_quick_expense_amount')
-            context.user_data['temp_quick_amount'] = amount
-            context.user_data['waiting_for_quick_expense_desc'] = True
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"💰 Monto: **${amount:,.0f}**\n\n¿En qué lo gastaste? (Descripción corta)")
-        except ValueError:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Eso no parece un número. Intenta de nuevo.")
-        return
-
-    if context.user_data.get('waiting_for_quick_expense_desc'):
-        description = text.strip()
-        amount = context.user_data.get('temp_quick_amount')
-        context.user_data.pop('waiting_for_quick_expense_desc')
         
-        # Guardar preliminarmente
-        user_id = update.effective_user.id
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        
-        receipt = repo.save_receipt(
-            user_id=user_id, 
-            raw_text=f"GASTO RAPIDO: {description}", 
-            image_path=None, 
-            file_hash=f"quick_{uuid.uuid4()}"
-        )
-        repo.update_total_amount(receipt.id, amount)
-        repo.update_merchant(receipt.id, description)
-        
-        # Mostrar opciones de categoría
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"✅ Anotado: **${amount:,.0f}** en **{description}**.\n\nAhora, elige la categoría 👇",
-            parse_mode='Markdown'
-        )
-        
-        # Reutilizamos la lógica de botones de categoría, pero necesitamos el ID
-        # Creamos los botones manualmente aquí para no depender de show_receipt_options que muestra todo el texto de nuevo
-        keyboard = [
-            [InlineKeyboardButton("🍔 Comida", callback_data=f"cat_{receipt.id}_Comida"), InlineKeyboardButton("🛒 Supermercado", callback_data=f"cat_{receipt.id}_Supermercado")],
-            [InlineKeyboardButton("🚌 Transporte", callback_data=f"cat_{receipt.id}_Transporte"), InlineKeyboardButton("💊 Salud", callback_data=f"cat_{receipt.id}_Salud")],
-            [InlineKeyboardButton("🎉 Ocio", callback_data=f"cat_{receipt.id}_Ocio"), InlineKeyboardButton("🏠 Hogar", callback_data=f"cat_{receipt.id}_Hogar")],
-            [InlineKeyboardButton("📦 Otros", callback_data=f"cat_{receipt.id}_Otros")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="📂 **Selecciona Categoría:**", reply_markup=reply_markup)
-        return
-
-    if text == "📊 Reportes y Gastos":
-        await show_reports_menu(update, context)
-    elif text == "📜 Mis Boletas":
-        await ultimos_command(update, context)
-    elif text == "💰 Presupuestos":
-        await budgets_menu(update, context)
-    elif text == "🔄 Suscripciones":
-        await subscriptions_menu(update, context)
-    elif text == "⏰ Recordatorios":
-        await reminders_menu(update, context)
-    elif text == "🔙 Volver al Menú Principal":
-        await show_main_menu(update, context)
-    elif text == "📅 Gastos Mes Actual":
-        await gastos_command(update, context)
-    elif text == "📅 Gastos Año Actual":
-        await gastos_anual_command(update, context)
-    elif text == "📂 Por Categoría (Mes)":
-        await gastos_categoria_command(update, context)
-    elif "Por Marca (Mes)" in text:
-        await gastos_marca_command(update, context)
-    elif "Exportar Excel" in text:
-        await export_excel_command(update, context)
-    elif "Cambiar Fecha" in text:
-        await ask_year_selection(update, context)
-    elif "Ayuda" in text:
-        await start(update, context)
-    elif text.lower() in ["hola", "hi", "hello", "buenos dias", "buenas tardes", "buenas noches", "holis"]:
-        await start(update, context)
-    else:
-        # Intentar ingreso manual
-        if await handle_manual_entry(update, context, text):
-            return
-            
-        # Si no es nada conocido
-        error_phrase = get_random_phrase("error_user")
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"{error_phrase} No entendí eso... ¿Intentabas decirme algo o solo probabas mis botones? 🤔\nUsa el menú de abajo 👇"
-        )
-
-async def budgets_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Muestra el menú de presupuestos."""
-    user_id = update.effective_user.id
-    current_month = datetime.now().month
-    current_year = datetime.now().year
-    
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    budgets = repo.get_all_budgets(user_id, current_month, current_year)
-    
-    msg = f"💰 **Tus Presupuestos ({current_month}/{current_year})**\n\n"
-    
-    if not budgets:
-        msg += "No tienes presupuestos definidos. ¡Vamos a crear uno! 👇"
-    else:
-        for b in budgets:
-            status = repo.get_budget_status(user_id, b.category, current_month, current_year)
-            if status:
-                spent, limit, pct = status
-                icon = "🟢"
-                if pct > 80: icon = "🟡"
-                if pct >= 100: icon = "🔴"
-                
-                msg += f"{icon} **{b.category}**: ${spent:,.0f} / ${limit:,.0f} ({pct:.1f}%)\n"
-                if pct >= 100:
-                    msg += f"   ⚠️ _¡Shet! Te pasaste por ${spent-limit:,.0f}!_\n"
-    
-    keyboard = [
-        [InlineKeyboardButton("➕ Nuevo Presupuesto", callback_data="new_budget")],
-        [InlineKeyboardButton("✏️/🗑️ Gestionar", callback_data="manage_budgets")],
-        [InlineKeyboardButton("🔄 Actualizar", callback_data="refresh_budgets")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, reply_markup=reply_markup, parse_mode='Markdown')
-
-async def subscriptions_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Muestra el menú de suscripciones."""
-    user_id = update.effective_user.id
-    
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    subs = repo.get_subscriptions(user_id)
-    
-    msg = "🔄 **Tus Suscripciones Activas**\n\n"
-    if not subs:
-        msg += "No tienes suscripciones. ¿Netflix? ¿Spotify? ¡Agrégalos! 👇"
-    else:
-        for s in subs:
-            msg += f"• **{s.name}**: ${s.amount:,.0f} (Día {s.day_of_month})\n"
-            
-    keyboard = [
-        [InlineKeyboardButton("➕ Nueva Suscripción", callback_data="new_sub")],
-        [InlineKeyboardButton("🗑️ Borrar Suscripción", callback_data="del_sub")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, reply_markup=reply_markup, parse_mode='Markdown')
+    # Si no es nada conocido
+    error_phrase = get_random_phrase("error_user")
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f"{error_phrase} No entendí eso... ¿Intentabas decirme algo o solo probabas mis botones? 🤔\nUsa el menú de abajo 👇"
+    )
 
 async def reminders_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Muestra el menú de recordatorios."""
@@ -465,6 +342,16 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
+    # Delegar a handlers modulares
+    if await handle_expense_callbacks(update, context):
+        return
+    if await handle_report_callbacks(update, context):
+        return
+    if await handle_budget_callbacks(update, context):
+        return
+    if await handle_subscription_callbacks(update, context):
+        return
+    
     data = query.data
 
     if data.startswith("undo_sub_"):
@@ -479,26 +366,7 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text=f"✅ El gasto de la suscripción ha sido eliminado correctamente. No se sumará a tus reportes.")
         return
     
-    if data.startswith("new_budget"):
-        # Preguntar categoría para presupuesto
-        keyboard = [
-            [InlineKeyboardButton("🍔 Comida", callback_data="set_budget_Comida"), InlineKeyboardButton("🛒 Supermercado", callback_data="set_budget_Supermercado")],
-            [InlineKeyboardButton("🚌 Transporte", callback_data="set_budget_Transporte"), InlineKeyboardButton("🎉 Ocio", callback_data="set_budget_Ocio")],
-            [InlineKeyboardButton("🏠 Hogar", callback_data="set_budget_Hogar"), InlineKeyboardButton("📦 Otros", callback_data="set_budget_Otros")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text="💰 **Elige la categoría para el presupuesto:**", reply_markup=reply_markup, parse_mode='Markdown')
-        return
 
-    if data.startswith("set_budget_"):
-        category = data.split("_")[2]
-        context.user_data['waiting_for_budget_cat'] = category
-        await query.edit_message_text(text=f"💰 **Presupuesto para {category}:**\n\nEscribe el monto límite (ej: 150000):", parse_mode='Markdown')
-        return
-
-    if data.startswith("refresh_budgets"):
-        await budgets_menu(update, context)
-        return
 
     if data.startswith("new_sub"):
         context.user_data['waiting_for_sub_name'] = True
@@ -855,10 +723,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     
     if isinstance(update, Update) and update.effective_chat:
         error_msg = get_random_error_message(str(context.error))
+        # Escapar caracteres especiales de Markdown si es necesario, o no usar Markdown para el error
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text=error_msg,
-            parse_mode='Markdown'
+            text=error_msg
+            # parse_mode='Markdown'  <-- Quitamos esto para evitar errores de parseo en mensajes de error complejos
         )
 
 async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
@@ -995,6 +864,8 @@ def run_bot():
     start_handler = CommandHandler('start', start)
     gastos_handler = CommandHandler('gastos', gastos_command)
     ultimos_handler = CommandHandler('ultimos', ultimos_command)
+    presupuestos_handler = CommandHandler('presupuestos', budgets_menu)
+    suscripciones_handler = CommandHandler('suscripciones', subscriptions_menu)
     
     # Handler para los botones del menú (texto)
     text_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text_message)
@@ -1008,6 +879,8 @@ def run_bot():
     application.add_handler(start_handler)
     application.add_handler(gastos_handler)
     application.add_handler(ultimos_handler)
+    application.add_handler(presupuestos_handler)
+    application.add_handler(suscripciones_handler)
     application.add_handler(text_handler)
     application.add_handler(doc_handler)
     application.add_handler(photo_handler)

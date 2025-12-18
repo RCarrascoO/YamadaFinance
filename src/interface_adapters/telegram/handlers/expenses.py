@@ -9,6 +9,7 @@ from infrastructure.ocr.ocr_service import OCRService
 from infrastructure.database.repository import ReceiptRepository
 from infrastructure.database.db_config import get_db
 from interface_adapters.telegram.handlers.common import get_random_phrase, get_random_error_message, generate_lilo_insight
+from interface_adapters.telegram.handlers.budgets import check_budget_alert
 
 DOWNLOAD_DIR = "downloads"
 if not os.path.exists(DOWNLOAD_DIR):
@@ -61,6 +62,7 @@ async def handle_manual_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
         if predicted_category:
             repo.update_category(receipt.id, predicted_category)
             cat_msg = f"Lo puse en **{predicted_category}**."
+            await check_budget_alert(update, context, predicted_category)
         else:
             cat_msg = "No supe qué categoría ponerle. ¿Me ayudas?"
             
@@ -157,13 +159,26 @@ async def show_receipt_options(update: Update, context: ContextTypes.DEFAULT_TYP
         f"```\n{safe_text}...\n```"
     )
     
-    keyboard = [
-        [InlineKeyboardButton("🍔 Comida", callback_data=f"cat_{receipt.id}_Comida"), InlineKeyboardButton("🛒 Supermercado", callback_data=f"cat_{receipt.id}_Supermercado")],
-        [InlineKeyboardButton("🚌 Transporte", callback_data=f"cat_{receipt.id}_Transporte"), InlineKeyboardButton("🎉 Ocio", callback_data=f"cat_{receipt.id}_Ocio")],
-        [InlineKeyboardButton("🏠 Hogar", callback_data=f"cat_{receipt.id}_Hogar"), InlineKeyboardButton("💊 Salud", callback_data=f"cat_{receipt.id}_Salud")],
-        [InlineKeyboardButton("📦 Otros", callback_data=f"cat_{receipt.id}_Otros")],
-        [InlineKeyboardButton("✏️ Corregir Marca", callback_data=f"edit_merchant_{receipt.id}"), InlineKeyboardButton("💲 Corregir Monto", callback_data=f"edit_amount_{receipt.id}")]
-    ]
+    keyboard = []
+    
+    # Si ya tiene categoría, mostrar botón para cambiarla
+    if receipt.category:
+        keyboard.append([InlineKeyboardButton("📂 Cambiar Categoría", callback_data=f"change_cat_{receipt.id}")])
+    else:
+        # Si no tiene categoría, mostrar opciones
+        keyboard = [
+            [InlineKeyboardButton("🍔 Comida", callback_data=f"cat_{receipt.id}_Comida"), InlineKeyboardButton("🛒 Supermercado", callback_data=f"cat_{receipt.id}_Supermercado")],
+            [InlineKeyboardButton("🚌 Transporte", callback_data=f"cat_{receipt.id}_Transporte"), InlineKeyboardButton("🎉 Ocio", callback_data=f"cat_{receipt.id}_Ocio")],
+            [InlineKeyboardButton("🏠 Hogar", callback_data=f"cat_{receipt.id}_Hogar"), InlineKeyboardButton("💊 Salud", callback_data=f"cat_{receipt.id}_Salud")],
+            [InlineKeyboardButton("📦 Otros", callback_data=f"cat_{receipt.id}_Otros")]
+        ]
+
+    # Botones de edición siempre presentes
+    keyboard.append([InlineKeyboardButton("✏️ Corregir Marca", callback_data=f"edit_merchant_{receipt.id}"), InlineKeyboardButton("💲 Corregir Monto", callback_data=f"edit_amount_{receipt.id}")])
+    
+    # Botones de confirmación y cancelación
+    keyboard.append([InlineKeyboardButton("✅ Confirmar", callback_data=f"confirm_receipt_{receipt.id}"), InlineKeyboardButton("🗑️ Cancelar", callback_data=f"cancel_receipt_{receipt.id}")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id=chat_id, text=response_msg, reply_markup=reply_markup, parse_mode='Markdown')
 
@@ -238,14 +253,67 @@ async def handle_expense_callbacks(update: Update, context: ContextTypes.DEFAULT
         receipt_id = int(data.split("_")[2])
         # Guardar estado para esperar el nombre
         context.user_data['waiting_for_merchant'] = receipt_id
-        await query.edit_message_text(text="✏️ **Por favor, escribe el nombre de la marca/comercio:**", parse_mode='Markdown')
+        
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"back_to_options_{receipt_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text="✏️ **Por favor, escribe el nombre de la marca/comercio:**", reply_markup=reply_markup, parse_mode='Markdown')
         return True
 
     if data.startswith("edit_amount_"):
         receipt_id = int(data.split("_")[2])
         # Guardar estado para esperar el monto
         context.user_data['waiting_for_amount'] = receipt_id
-        await query.edit_message_text(text="💲 **Por favor, escribe el monto total correcto (solo números):**", parse_mode='Markdown')
+        
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"back_to_options_{receipt_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text="💲 **Por favor, escribe el monto total correcto (solo números):**", reply_markup=reply_markup, parse_mode='Markdown')
+        return True
+
+    if data.startswith("confirm_receipt_"):
+        receipt_id = int(data.split("_")[2])
+        await query.edit_message_text(text="✅ **¡Boleta confirmada!** Todo listo. 🚀", parse_mode='Markdown')
+        return True
+
+    if data.startswith("cancel_receipt_"):
+        receipt_id = int(data.split("_")[2])
+        
+        db_gen = get_db()
+        db = next(db_gen)
+        repo = ReceiptRepository(db)
+        repo.delete_receipt(receipt_id)
+        
+        await query.edit_message_text(text="🗑️ **Boleta eliminada.** No se guardó nada.", parse_mode='Markdown')
+        return True
+
+    if data.startswith("change_cat_"):
+        receipt_id = int(data.split("_")[2])
+        
+        keyboard = [
+            [InlineKeyboardButton("🍔 Comida", callback_data=f"cat_{receipt_id}_Comida"), InlineKeyboardButton("🛒 Supermercado", callback_data=f"cat_{receipt_id}_Supermercado")],
+            [InlineKeyboardButton("🚌 Transporte", callback_data=f"cat_{receipt_id}_Transporte"), InlineKeyboardButton("🎉 Ocio", callback_data=f"cat_{receipt_id}_Ocio")],
+            [InlineKeyboardButton("🏠 Hogar", callback_data=f"cat_{receipt_id}_Hogar"), InlineKeyboardButton("💊 Salud", callback_data=f"cat_{receipt_id}_Salud")],
+            [InlineKeyboardButton("📦 Otros", callback_data=f"cat_{receipt_id}_Otros")],
+            [InlineKeyboardButton("🔙 Volver", callback_data=f"back_to_options_{receipt_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text="📂 **Selecciona la nueva categoría:**", reply_markup=reply_markup, parse_mode='Markdown')
+        return True
+
+    if data == "cancel_manual_entry":
+        await query.edit_message_text(text="❌ Operación cancelada. Si necesitas algo más, aquí estoy. 🤖")
+        return True
+
+    if data.startswith("back_to_options_"):
+        receipt_id = int(data.split("_")[3])
+        
+        # Limpiar estados de espera por si acaso
+        context.user_data.pop('waiting_for_merchant', None)
+        context.user_data.pop('waiting_for_amount', None)
+        
+        await query.delete_message()
+        await show_receipt_options(update, context, receipt_id)
         return True
 
     if data.startswith("cat_"):
@@ -261,10 +329,16 @@ async def handle_expense_callbacks(update: Update, context: ContextTypes.DEFAULT
         # Generar insight
         insight = generate_lilo_insight(update.effective_user.id, repo)
         
+        # Verificar presupuesto
+        await check_budget_alert(update, context, category)
+        
         await query.edit_message_text(
             text=f"✅ ¡Listo! Guardado en **{category}**.\n\n💡 **Dato curioso:** {insight}", 
             parse_mode='Markdown'
         )
+        
+        # Volver a mostrar las opciones por si quiere editar algo más
+        await show_receipt_options(update, context, receipt_id)
         return True
         
     return False

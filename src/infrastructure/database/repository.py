@@ -373,6 +373,17 @@ class ReceiptRepository:
         self.db.query(SubscriptionModel).filter(SubscriptionModel.id == sub_id).delete()
         self.db.commit()
 
+    def update_subscription(self, sub_id: int, amount: float = None, day: int = None):
+        sub = self.db.query(SubscriptionModel).filter(SubscriptionModel.id == sub_id).first()
+        if sub:
+            if amount is not None:
+                sub.amount = amount
+            if day is not None:
+                sub.day_of_month = day
+            self.db.commit()
+            return sub
+        return None
+
     def get_due_subscriptions(self, day: int):
         """Obtiene suscripciones que deben cobrarse hoy y no han sido procesadas este mes."""
         current_month_str = datetime.now().strftime("%Y-%m")
