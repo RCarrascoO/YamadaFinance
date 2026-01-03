@@ -211,7 +211,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"¡Hola {user_first_name}! Soy **Lilo** ✨\n"
         "¡Qué alegría verte por aquí! Soy tu asistente financiera y estoy lista para poner orden en tus gastos. 🦸‍♀️📊\n\n"
         "Mi misión es proteger tu bolsillo y ayudarte a organizar tus gastos. ¡Seré tu heroína financiera! (Y lo haré con mucho estilo 😎).\n\n"
-        "🧠 **Cerebro Potenciado:** Ahora utilizo **Gemini 2.5 Flash** para leer tus boletas con una precisión increíble. ¡Pruébame! 👁️✨\n\n"
+        "🧠 **Cerebro Potenciado:** Ahora utilizo **Gemini 3 Flash Preview** para leer tus boletas con una precisión increíble. ¡Pruébame! 👁️✨\n\n"
         "🚀 **¿En qué puedo ayudarte hoy?**\n"
         "• **Leer Boletas:** Mándame una foto o **PDF** y yo extraigo los datos.\n"
         "• **Ingreso Manual:** Escribe '5000 pan' y lo anoto al instante.\n"
@@ -219,7 +219,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• **Suscripciones:** Gestiona tus pagos recurrentes (Netflix, Spotify, etc).\n"
         "• **Recordatorios:** Pídeme que te recuerde cosas importantes.\n"
         "• **Reportes:** Gráficos y resúmenes para ver a dónde va tu dinero.\n\n"
-        "⚠️ **Nota:** Aún estoy entrenando (**BETA 5**), así que tenme un poquito de paciencia, ¿sí? 😉\n"
+        "⚠️ **Nota:** Aún estoy entrenando (**BETA 6**), así que tenme un poquito de paciencia, ¿sí? 😉\n"
         "💡 **Feedback:** Si ves algo raro o tienes ideas, ¡cuéntame! Me ayuda mucho a mejorar.\n\n"
         "¡Vamos allá! Selecciona una opción 👇"
     )

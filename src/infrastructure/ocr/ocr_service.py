@@ -16,12 +16,12 @@ class OCRService:
             logger.warning("GEMINI_API_KEY no encontrada en variables de entorno.")
         else:
             genai.configure(api_key=api_key)
-            # Usamos el alias 'gemini-flash-latest' que aparece disponible en tu lista de modelos
-            self.model = genai.GenerativeModel('gemini-flash-latest')
+            # Usamos el modelo 'gemini-3-flash-preview'
+            self.model = genai.GenerativeModel('gemini-3-flash-preview')
 
     def extract_data(self, file_path: str) -> dict:
         """
-        Envía la imagen/PDF a Gemini 1.5 Flash y retorna un JSON estructurado.
+        Envía la imagen/PDF a Gemini 3 Flash y retorna un JSON estructurado.
         """
         try:
             if not os.path.exists(file_path):
