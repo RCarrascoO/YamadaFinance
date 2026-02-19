@@ -1,16 +1,11 @@
 import logging
 import os
-import uuid
-import hashlib
 import random
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-from infrastructure.ocr.ocr_service import OCRService
 from infrastructure.database.repository import ReceiptRepository
-from infrastructure.database.db_config import get_db
-from infrastructure.utils.charts import generate_pie_chart, generate_bar_chart, generate_monthly_trend_chart
-from infrastructure.utils.excel_exporter import generate_excel_report
+from infrastructure.database.db_config import get_db_session
 from interface_adapters.telegram.handlers.common import start, check_easter_eggs, show_main_menu
 from interface_adapters.telegram.handlers.reports import (
     show_reports_menu, ask_year_selection, ask_month_selection,
@@ -42,8 +37,6 @@ logging.basicConfig(
 DOWNLOAD_DIR = "downloads"
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
-
-ocr_service = OCRService()
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja los clics en los botones del menú principal (que envían texto)."""
@@ -96,10 +89,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         receipt_id = context.user_data.pop('waiting_for_merchant') # Obtener ID y limpiar estado
         merchant_name = text.strip()
         
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        repo.update_merchant(receipt_id, merchant_name)
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
+            repo.update_merchant(receipt_id, merchant_name)
         
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -118,10 +110,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             clean_text = text.replace('$', '').replace('.', '').replace(',', '').strip()
             new_amount = float(clean_text)
             
-            db_gen = get_db()
-            db = next(db_gen)
-            repo = ReceiptRepository(db)
-            repo.update_total_amount(receipt_id, new_amount)
+            with get_db_session() as db:
+                repo = ReceiptRepository(db)
+                repo.update_total_amount(receipt_id, new_amount)
             
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -145,62 +136,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if await handle_subscription_text_input(update, context):
         return
 
-    # Verificar si estamos esperando nombre de suscripción
-    if context.user_data.get('waiting_for_sub_name'):
-        context.user_data.pop('waiting_for_sub_name')
-        context.user_data['temp_sub_name'] = text.strip()
-        context.user_data['waiting_for_sub_amount'] = True
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=f"📝 Nombre: **{text.strip()}**\n\nAhora, ¿cuánto cuesta mensualmente? (ej: 5990)", parse_mode='Markdown')
-        return
-
-    # Verificar si estamos esperando monto de suscripción
-    if context.user_data.get('waiting_for_sub_amount'):
-        context.user_data.pop('waiting_for_sub_amount')
-        try:
-            clean_text = text.replace('$', '').replace('.', '').replace(',', '').strip()
-            amount = float(clean_text)
-            context.user_data['temp_sub_amount'] = amount
-            context.user_data['waiting_for_sub_day'] = True
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"💰 Monto: **${amount:,.0f}**\n\nPor último, ¿qué día del mes se paga? (ej: 5)", parse_mode='Markdown')
-        except ValueError:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Número inválido. Intenta de nuevo.")
-        return
-
-    # Verificar si estamos esperando día de suscripción
-    if context.user_data.get('waiting_for_sub_day'):
-        context.user_data.pop('waiting_for_sub_day')
-        try:
-            day = int(text.strip())
-            if day < 1 or day > 31: raise ValueError
-            
-            name = context.user_data.get('temp_sub_name')
-            amount = context.user_data.get('temp_sub_amount')
-            user_id = update.effective_user.id
-            
-            db_gen = get_db()
-            db = next(db_gen)
-            repo = ReceiptRepository(db)
-            repo.add_subscription(user_id, name, amount, day)
-            
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"✅ ¡Suscripción Guardada! 🎉\n\n**{name}** - ${amount:,.0f} (Día {day})\nTe recordaré cuando llegue el día.",
-                parse_mode='Markdown'
-            )
-            await subscriptions_menu(update, context)
-        except ValueError:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Día inválido (1-31). Intenta de nuevo.")
-        return
-
     # Verificar si estamos editando mensaje de recordatorio
     if context.user_data.get('waiting_for_rem_edit_msg'):
         rem_id = context.user_data.pop('waiting_for_rem_edit_msg')
         new_msg = text.strip()
         
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        repo.update_reminder(rem_id, message=new_msg)
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
+            repo.update_reminder(rem_id, message=new_msg)
         
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -254,25 +197,23 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
 
             user_id = update.effective_user.id
-            db_gen = get_db()
-            db = next(db_gen)
-            repo = ReceiptRepository(db)
+            with get_db_session() as db:
+                repo = ReceiptRepository(db)
+                # Verificar si estamos editando
+                editing_id = context.user_data.get('editing_reminder_id')
+                if editing_id:
+                    repo.update_reminder(editing_id, remind_at=remind_at)
+                    context.user_data.pop('editing_reminder_id')
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=f"✅ ¡Fecha Actualizada! 🔔\n\nNueva Fecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
+                        parse_mode='Markdown'
+                    )
+                    await reminders_menu(update, context)
+                    return
 
-            # Verificar si estamos editando
-            editing_id = context.user_data.get('editing_reminder_id')
-            if editing_id:
-                repo.update_reminder(editing_id, remind_at=remind_at)
-                context.user_data.pop('editing_reminder_id')
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"✅ ¡Fecha Actualizada! 🔔\n\nNueva Fecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
-                    parse_mode='Markdown'
-                )
-                await reminders_menu(update, context)
-                return
-
-            msg = context.user_data.get('temp_rem_msg')
-            repo.add_reminder(user_id, msg, remind_at)
+                msg = context.user_data.get('temp_rem_msg')
+                repo.add_reminder(user_id, msg, remind_at)
             
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -301,10 +242,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             msg = context.user_data.get('temp_rem_msg')
             user_id = update.effective_user.id
             
-            db_gen = get_db()
-            db = next(db_gen)
-            repo = ReceiptRepository(db)
-            repo.add_reminder(user_id, msg, remind_at)
+            with get_db_session() as db:
+                repo = ReceiptRepository(db)
+                repo.add_reminder(user_id, msg, remind_at)
             
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -317,34 +257,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data['waiting_for_reminder_date'] = True
         return
     
-    # Verificar si estamos esperando nuevo monto de presupuesto
-    if context.user_data.get('waiting_for_budget_edit_amount'):
-        budget_id = context.user_data.pop('waiting_for_budget_edit_amount')
-        try:
-            clean_text = text.replace('$', '').replace('.', '').replace(',', '').strip()
-            amount = float(clean_text)
-            
-            db_gen = get_db()
-            db = next(db_gen)
-            repo = ReceiptRepository(db)
-            
-            # Obtener presupuesto para saber categoría y fecha
-            budget = repo.get_budget_by_id(budget_id)
-            if budget:
-                repo.set_budget(budget.user_id, budget.category, amount, budget.month, budget.year)
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text=f"✅ ¡Presupuesto Actualizado! 🎯\n\n**{budget.category}**: ${amount:,.0f}",
-                    parse_mode='Markdown'
-                )
-            else:
-                await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Error: No encontré el presupuesto.")
-                
-            await budgets_menu(update, context)
-        except ValueError:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Monto inválido. Intenta de nuevo.")
-        return
-
     # Intentar ingreso manual
     if await handle_manual_entry(update, context, text):
         return
@@ -388,54 +300,11 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("undo_sub_"):
         receipt_id = int(data.split("_")[2])
         
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
+            repo.delete_receipt(receipt_id)
         
-        repo.delete_receipt(receipt_id)
-        
-        await query.edit_message_text(text=f"✅ El gasto de la suscripción ha sido eliminado correctamente. No se sumará a tus reportes.")
-        return
-    
-
-
-    if data.startswith("new_sub"):
-        context.user_data['waiting_for_sub_name'] = True
-        await query.edit_message_text(text="🔄 **Nueva Suscripción**\n\nPrimero, escribe el **Nombre** del servicio (ej: Netflix):", parse_mode='Markdown')
-        return
-
-    if data.startswith("del_sub"):
-        # Listar para borrar
-        user_id = update.effective_user.id
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        subs = repo.get_subscriptions(user_id)
-        
-        if not subs:
-            await query.edit_message_text(text="No tienes nada que borrar. 🤷‍♀️")
-            return
-            
-        keyboard = []
-        for s in subs:
-            keyboard.append([InlineKeyboardButton(f"❌ {s.name}", callback_data=f"confirm_del_sub_{s.id}")])
-        keyboard.append([InlineKeyboardButton("🔙 Cancelar", callback_data="refresh_subs")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text="🗑️ **¿Cuál quieres eliminar?**", reply_markup=reply_markup, parse_mode='Markdown')
-        return
-
-    if data.startswith("confirm_del_sub_"):
-        sub_id = int(data.split("_")[3])
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        repo.delete_subscription(sub_id)
-        await query.edit_message_text(text="✅ Suscripción eliminada. ¡Un gasto menos! 🎉")
-        return
-
-    if data.startswith("refresh_subs"):
-        await subscriptions_menu(update, context)
+        await query.edit_message_text(text="✅ El gasto de la suscripción ha sido eliminado correctamente. No se sumará a tus reportes.")
         return
 
     logging.info("Checking reminder callbacks...")
@@ -445,64 +314,6 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     logging.info("Not handled by any callback handler")
-
-    # --- Lógica de Gestión de Presupuestos ---
-    if data.startswith("manage_budgets"):
-        user_id = update.effective_user.id
-        current_month = datetime.now().month
-        current_year = datetime.now().year
-        
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        budgets = repo.get_all_budgets(user_id, current_month, current_year)
-        
-        if not budgets:
-            await query.edit_message_text(text="No tienes presupuestos para gestionar. 🤷‍♀️")
-            return
-            
-        keyboard = []
-        for b in budgets:
-            keyboard.append([InlineKeyboardButton(f"{b.category} (${b.amount_limit:,.0f})", callback_data=f"sel_budget_{b.id}")])
-        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="refresh_budgets")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text="🔧 **Selecciona un presupuesto para editar o borrar:**", reply_markup=reply_markup, parse_mode='Markdown')
-        return
-
-    if data.startswith("sel_budget_"):
-        budget_id = int(data.split("_")[2])
-        keyboard = [
-            [InlineKeyboardButton("✏️ Editar Monto", callback_data=f"edit_budget_{budget_id}")],
-            [InlineKeyboardButton("🗑️ Eliminar", callback_data=f"del_budget_{budget_id}")],
-            [InlineKeyboardButton("🔙 Volver", callback_data="manage_budgets")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text="¿Qué quieres hacer con este presupuesto?", reply_markup=reply_markup)
-        return
-
-    if data.startswith("del_budget_"):
-        budget_id = int(data.split("_")[2])
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        repo.delete_budget(budget_id)
-        await query.edit_message_text(text="✅ Presupuesto eliminado. ¡Adiós restricciones! (Pero cuidado con gastar de más 😉)")
-        return
-
-    if data.startswith("edit_budget_"):
-        budget_id = int(data.split("_")[2])
-        context.user_data['waiting_for_budget_edit_amount'] = budget_id
-        await query.edit_message_text(text="✏️ **Escribe el nuevo monto límite (ej: 200000):**", parse_mode='Markdown')
-        return
-
-    # Lógica de selección de fecha
-    if await handle_report_callbacks(update, context):
-        return
-
-    # Lógica de gastos (Delegada)
-    if await handle_expense_callbacks(update, context):
-        return
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log the error and send a telegram message to notify the developer."""
@@ -519,57 +330,54 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
     """Revisa si hay recordatorios pendientes y los envía."""
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    reminders = repo.get_pending_reminders()
-    
-    for rem in reminders:
-        try:
-            await context.bot.send_message(
-                chat_id=rem.user_id,
-                text=f"⏰ **¡Recordatorio!** 🔔\n\n{rem.message}\n\n(Programado para: {rem.remind_at.strftime('%d-%m-%Y %H:%M')})",
-                parse_mode='Markdown'
-            )
-            repo.mark_reminder_sent(rem.id)
-        except Exception as e:
-            logging.error(f"Error enviando recordatorio {rem.id}: {e}")
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        reminders = repo.get_pending_reminders()
+        
+        for rem in reminders:
+            try:
+                await context.bot.send_message(
+                    chat_id=rem.user_id,
+                    text=f"⏰ **¡Recordatorio!** 🔔\n\n{rem.message}\n\n(Programado para: {rem.remind_at.strftime('%d-%m-%Y %H:%M')})",
+                    parse_mode='Markdown'
+                )
+                repo.mark_reminder_sent(rem.id)
+            except Exception as e:
+                logging.error(f"Error enviando recordatorio {rem.id}: {e}")
 
 async def check_subscriptions(context: ContextTypes.DEFAULT_TYPE):
     """Revisa suscripciones vencidas y genera el gasto."""
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
+    processed = []
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        today = datetime.now().day
+        subs = repo.get_due_subscriptions(today)
+        
+        for sub in subs:
+            try:
+                receipt = repo.add_expense(
+                    user_id=sub.user_id,
+                    amount=sub.amount,
+                    description=f"Suscripción: {sub.name}",
+                    category="Suscripciones"
+                )
+                repo.mark_subscription_processed(sub.id)
+                processed.append((sub.user_id, sub.name, sub.amount, sub.id, receipt.id))
+            except Exception as e:
+                logging.error(f"Error procesando suscripción {sub.id}: {e}")
     
-    today = datetime.now().day
-    subs = repo.get_due_subscriptions(today)
-    
-    for sub in subs:
+    for user_id, name, amount, sub_id, receipt_id in processed:
         try:
-            # 1. Crear el gasto
-            receipt = repo.add_expense(
-                user_id=sub.user_id,
-                amount=sub.amount,
-                description=f"Suscripción: {sub.name}",
-                category="Suscripciones"
-            )
-            
-            # 2. Marcar como procesada
-            repo.mark_subscription_processed(sub.id)
-            
-            # 3. Notificar con botón de deshacer
-            keyboard = [[InlineKeyboardButton("❌ No se cobró (Eliminar)", callback_data=f"undo_sub_{receipt.id}")]]
+            keyboard = [[InlineKeyboardButton("❌ No se cobró (Eliminar)", callback_data=f"undo_sub_{receipt_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            
             await context.bot.send_message(
-                chat_id=sub.user_id,
-                text=f"📅 **Suscripción Procesada**\n\nSe ha registrado automáticamente el pago de **{sub.name}** por **${sub.amount:,.0f}**.\n\nSi este cobro no ocurrió, usa el botón de abajo.",
+                chat_id=user_id,
+                text=f"📅 **Suscripción Procesada**\n\nSe ha registrado automáticamente el pago de **{name}** por **${amount:,.0f}**.\n\nSi este cobro no ocurrió, usa el botón de abajo.",
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
             )
         except Exception as e:
-            logging.error(f"Error procesando suscripción {sub.id}: {e}")
+            logging.error(f"Error enviando notificación de suscripción {sub_id}: {e}")
 
 async def send_random_bother_message(context: ContextTypes.DEFAULT_TYPE):
     """Envía mensajes aleatorios a los usuarios para molestarlos con cariño."""
@@ -577,11 +385,9 @@ async def send_random_bother_message(context: ContextTypes.DEFAULT_TYPE):
     if random.random() > 0.05: 
         return
 
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    users = repo.get_all_active_users()
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        users = repo.get_all_active_users()
     
     messages = [
         # --- Clásicos y Cariñosos ---
@@ -641,9 +447,9 @@ def run_bot():
         application.job_queue.run_repeating(check_reminders, interval=60, first=10)
         # Revisar suscripciones cada 4 horas (o una vez al día, pero 4h es seguro por si se reinicia)
         application.job_queue.run_repeating(check_subscriptions, interval=14400, first=20)
-        # Mensajes aleatorios (cada 1 hora intenta con baja probabilidad)
-        application.job_queue.run_repeating(send_random_bother_message, interval=3600, first=60)
-        logging.info("JobQueue iniciado para recordatorios, suscripciones y mensajes aleatorios.")
+        # Mensajes aleatorios desactivados temporalmente
+        # application.job_queue.run_repeating(send_random_bother_message, interval=3600, first=60)
+        logging.info("JobQueue iniciado para recordatorios y suscripciones.")
 
     # Registrar Error Handler
     application.add_error_handler(error_handler)

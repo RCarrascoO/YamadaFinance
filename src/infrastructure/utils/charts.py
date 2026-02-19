@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('Agg')  # Backend sin pantalla, necesario en Docker
 import matplotlib.pyplot as plt
 import io
 

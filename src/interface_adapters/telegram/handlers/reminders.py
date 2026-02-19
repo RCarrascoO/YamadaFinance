@@ -3,7 +3,7 @@ from enum import Enum
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from infrastructure.database.db_config import get_db
+from infrastructure.database.db_config import get_db_session
 from infrastructure.database.repository import ReceiptRepository
 
 class ReminderActions(str, Enum):
@@ -162,11 +162,9 @@ async def handle_reminder_callbacks(update: Update, context: ContextTypes.DEFAUL
     return True
 
 async def list_reminders(query, user_id):
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    reminders = repo.get_active_reminders_for_user(user_id)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        reminders = repo.get_active_reminders_for_user(user_id)
     
     if not reminders:
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=ReminderActions.MENU.value)]]
@@ -187,10 +185,9 @@ async def list_reminders(query, user_id):
 # --- Helper Functions ---
 
 async def view_reminder(query, rem_id):
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    rem = repo.get_reminder_by_id(rem_id)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        rem = repo.get_reminder_by_id(rem_id)
     
     if not rem:
         await query.edit_message_text(text="❌ Ese recordatorio ya no existe.")
@@ -220,10 +217,9 @@ async def show_edit_menu(query, rem_id):
     await query.edit_message_text(text="¿Qué quieres modificar de este recordatorio?", reply_markup=reply_markup)
 
 async def delete_reminder(query, rem_id):
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    repo.delete_reminder(rem_id)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        repo.delete_reminder(rem_id)
     await query.edit_message_text(text="✅ Recordatorio eliminado.")
 
 async def show_date_selection_menu(query, rem_id=None):
@@ -348,51 +344,48 @@ async def finalize_reminder_date(query, context, user_id, minute, hour, day, mon
 async def save_or_update_reminder(query, context, user_id, remind_at):
     try:
         logging.info(f"Saving reminder for user {user_id} at {remind_at}")
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
+            editing_id = context.user_data.get('editing_reminder_id')
+            if editing_id:
+                logging.info(f"Updating existing reminder {editing_id}")
+                repo.update_reminder(editing_id, remind_at=remind_at)
+                context.user_data.pop('editing_reminder_id')
+                await query.edit_message_text(
+                    text=f"✅ ¡Fecha Actualizada! 🔔\n\nNueva Fecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
+                    parse_mode='Markdown'
+                )
+                return
 
-        editing_id = context.user_data.get('editing_reminder_id')
-        if editing_id:
-            logging.info(f"Updating existing reminder {editing_id}")
-            repo.update_reminder(editing_id, remind_at=remind_at)
-            context.user_data.pop('editing_reminder_id')
-            await query.edit_message_text(
-                text=f"✅ ¡Fecha Actualizada! 🔔\n\nNueva Fecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
-                parse_mode='Markdown'
-            )
-            return
+            msg = context.user_data.get('temp_rem_msg')
+            logging.info(f"New reminder message: {msg}")
 
-        msg = context.user_data.get('temp_rem_msg')
-        logging.info(f"New reminder message: {msg}")
-        
-        if not msg:
-            logging.warning("Message not found in user_data")
-            await query.edit_message_text(text="❌ Ups, perdí el mensaje. Intenta de nuevo.")
-            return
+            if not msg:
+                logging.warning("Message not found in user_data")
+                await query.edit_message_text(text="❌ Ups, perdí el mensaje. Intenta de nuevo.")
+                return
 
-        repo.add_reminder(user_id, msg, remind_at)
-        logging.info("Reminder saved to DB")
-        
-        if 'waiting_for_reminder_date' in context.user_data:
-            context.user_data.pop('waiting_for_reminder_date')
-        
-        # Sanitize msg for Markdown
-        safe_msg = msg.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
-        
-        try:
-            await query.edit_message_text(
-                text=f"✅ ¡Recordatorio Guardado! 🔔\n\n**{safe_msg}**\nFecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
-                parse_mode='Markdown'
-            )
-        except Exception as edit_error:
-            logging.error(f"Error editing message: {edit_error}")
-            # Fallback if edit fails
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"✅ ¡Recordatorio Guardado! 🔔\n\n**{safe_msg}**\nFecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
-                parse_mode='Markdown'
-            )
+            repo.add_reminder(user_id, msg, remind_at)
+            logging.info("Reminder saved to DB")
+
+            if 'waiting_for_reminder_date' in context.user_data:
+                context.user_data.pop('waiting_for_reminder_date')
+
+            # Sanitize msg for Markdown
+            safe_msg = msg.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
+            try:
+                await query.edit_message_text(
+                    text=f"✅ ¡Recordatorio Guardado! 🔔\n\n**{safe_msg}**\nFecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
+                    parse_mode='Markdown'
+                )
+            except Exception as edit_error:
+                logging.error(f"Error editing message: {edit_error}")
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"✅ ¡Recordatorio Guardado! 🔔\n\n**{safe_msg}**\nFecha: {remind_at.strftime('%d-%m-%Y %H:%M')}",
+                    parse_mode='Markdown'
+                )
 
     except Exception as e:
         logging.error(f"ERROR in save_or_update_reminder: {e}", exc_info=True)

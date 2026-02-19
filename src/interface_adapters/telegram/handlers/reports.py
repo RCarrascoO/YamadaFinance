@@ -2,7 +2,7 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
 from infrastructure.database.repository import ReceiptRepository
-from infrastructure.database.db_config import get_db
+from infrastructure.database.db_config import get_db_session
 from infrastructure.utils.charts import generate_pie_chart, generate_bar_chart, generate_monthly_trend_chart
 from infrastructure.utils.excel_exporter import generate_excel_report
 
@@ -80,11 +80,9 @@ async def gastos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     month_names = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     period_name = f"{month_names[selected_month]} {selected_year}"
 
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    total = repo.get_monthly_total(user_id, month=selected_month, year=selected_year)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        total = repo.get_monthly_total(user_id, month=selected_month, year=selected_year)
     
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
@@ -98,13 +96,10 @@ async def gastos_anual_command(update: Update, context: ContextTypes.DEFAULT_TYP
     # Obtener año seleccionado
     selected_year = context.user_data.get('report_year', datetime.now().year)
     
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    # Obtener total y desglose
-    total = repo.get_yearly_total(user_id, year=selected_year)
-    breakdown = repo.get_yearly_expenses_breakdown(user_id, year=selected_year)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        total = repo.get_yearly_total(user_id, year=selected_year)
+        breakdown = repo.get_yearly_expenses_breakdown(user_id, year=selected_year)
     
     # Construir mensaje de texto
     msg = f"📅 **Gran Resumen Anual {selected_year}** 🌟\n\n"
@@ -143,11 +138,9 @@ async def gastos_categoria_command(update: Update, context: ContextTypes.DEFAULT
     month_names = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     period_name = f"{month_names[selected_month]} {selected_year}"
     
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    results = repo.get_monthly_expenses_by_category(user_id, month=selected_month, year=selected_year)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        results = repo.get_monthly_expenses_by_category(user_id, month=selected_month, year=selected_year)
     
     if not results:
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"📭 No hay gastos registrados en **{period_name}**.", parse_mode='Markdown')
@@ -180,11 +173,9 @@ async def gastos_marca_command(update: Update, context: ContextTypes.DEFAULT_TYP
     month_names = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     period_name = f"{month_names[selected_month]} {selected_year}"
     
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    results = repo.get_monthly_expenses_by_merchant(user_id, month=selected_month, year=selected_year)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        results = repo.get_monthly_expenses_by_merchant(user_id, month=selected_month, year=selected_year)
     
     if not results:
         await context.bot.send_message(chat_id=update.effective_chat.id, text=f"📭 No hay gastos registrados en **{period_name}**.", parse_mode='Markdown')
@@ -215,13 +206,10 @@ async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await context.bot.send_message(chat_id=update.effective_chat.id, text="⏳ Generando reporte Excel...")
     
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    # Obtener todas las boletas del usuario
-    receipts = repo.get_all_receipts() 
-    user_receipts = [r for r in receipts if r.user_id == user_id]
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        receipts = repo.get_all_receipts()
+        user_receipts = [r for r in receipts if r.user_id == user_id]
     
     excel_file = generate_excel_report(user_receipts)
     
@@ -237,11 +225,9 @@ async def export_excel_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def ultimos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    
-    receipts = repo.get_last_receipts(user_id)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        receipts = repo.get_last_receipts(user_id)
     
     if not receipts:
         await context.bot.send_message(chat_id=update.effective_chat.id, text="📭 No tienes boletas guardadas aún.")

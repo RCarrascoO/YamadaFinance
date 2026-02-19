@@ -1,6 +1,6 @@
 import os
 import json
-import google.generativeai as genai
+from google import genai
 from PIL import Image
 from pdf2image import convert_from_path
 import logging
@@ -14,37 +14,30 @@ class OCRService:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             logger.warning("GEMINI_API_KEY no encontrada en variables de entorno.")
+            self.client = None
         else:
-            genai.configure(api_key=api_key)
-            # Usamos el modelo 'gemini-3-flash-preview'
-            self.model = genai.GenerativeModel('gemini-3-flash-preview')
+            self.client = genai.Client(api_key=api_key)
+        self.model_name = "gemini-3-flash-preview"
 
     def extract_data(self, file_path: str) -> dict:
         """
-        Envía la imagen/PDF a Gemini 3 Flash y retorna un JSON estructurado.
+        Envía la imagen/PDF a Gemini Flash y retorna un JSON estructurado.
         """
+        if not self.client:
+            return {"error": "GEMINI_API_KEY no configurada. El OCR no está disponible."}
+
         try:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"No se encontró el archivo: {file_path}")
 
-            image_parts = []
-
             # Manejar PDF (convertir primera página a imagen)
             if file_path.lower().endswith('.pdf'):
                 images = convert_from_path(file_path)
-                if images:
-                    # Usamos la primera página para el análisis principal
-                    # Gemini soporta múltiples imágenes, pero para boletas suele bastar una o se pueden enviar todas.
-                    # Por simplicidad y tokens, enviamos la primera.
-                    img = images[0]
-                    image_parts.append(img)
+                if not images:
+                    return {"error": "No se pudo convertir el PDF a imagen"}
+                img = images[0]
             else:
-                # Imagen normal
                 img = Image.open(file_path)
-                image_parts.append(img)
-
-            if not image_parts:
-                return {"error": "No se pudo procesar la imagen"}
 
             prompt = """
             Analiza esta boleta/recibo y extrae la siguiente información en formato JSON estrictamente:
@@ -59,16 +52,21 @@ class OCRService:
             Si no encuentras algún dato, usa null. Responde SOLO con el JSON.
             """
 
-            response = self.model.generate_content([prompt, image_parts[0]])
-            
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=[prompt, img]
+            )
+
             # Limpiar respuesta (a veces Gemini incluye ```json ... ```)
             text_response = response.text.strip()
             if text_response.startswith("```json"):
                 text_response = text_response[7:]
+            elif text_response.startswith("```"):
+                text_response = text_response[3:]
             if text_response.endswith("```"):
                 text_response = text_response[:-3]
-            
-            data = json.loads(text_response)
+
+            data = json.loads(text_response.strip())
             return data
 
         except Exception as e:

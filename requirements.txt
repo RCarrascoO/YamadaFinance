@@ -1,7 +1,7 @@
 python-telegram-bot[job-queue]==20.*
 sqlalchemy==2.*
 psycopg2-binary==2.9.*
-google-generativeai==0.8.*
+google-genai
 Pillow==10.*
 python-dotenv==1.0.*
 pdf2image==1.17.*

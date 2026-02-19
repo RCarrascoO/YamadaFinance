@@ -13,10 +13,7 @@ class ReceiptModel(Base):
     total_amount = Column(Float, nullable=True)
     raw_text = Column(Text, nullable=True)
     image_path = Column(String, nullable=True)
-    
-    # Campos adicionales
-    category = Column(String, nullable=True) # Ej: Comida, Transporte, Ocio
-    merchant_name = Column(String, nullable=True) # Ej: PC Factory, Cine Hoyts
+    category = Column(String, nullable=True)  # Ej: Comida, Transporte, Ocio
 
 class BudgetModel(Base):
     __tablename__ = "budgets"
@@ -36,6 +33,8 @@ class SubscriptionModel(Base):
     name = Column(String)
     amount = Column(Float)
     day_of_month = Column(Integer) # Día del mes para cobrar (1-31)
+    interval = Column(String, default="mensual")  # "mensual" o "anual"
+    month_of_year = Column(Integer, nullable=True)  # Solo para anuales: mes en que se cobra (1-12)
     category = Column(String, default="Suscripciones")
     last_processed_month = Column(String, nullable=True) # "YYYY-MM" para evitar duplicados
 

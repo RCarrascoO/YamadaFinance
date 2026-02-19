@@ -26,15 +26,6 @@ class ReceiptRepository:
         self.db.refresh(db_receipt)
         return db_receipt
 
-    def update_category(self, receipt_id: int, category: str):
-        """Actualiza la categoría de una boleta."""
-        receipt = self.db.query(ReceiptModel).filter(ReceiptModel.id == receipt_id).first()
-        if receipt:
-            receipt.category = category
-            self.db.commit()
-            self.db.refresh(receipt)
-        return receipt
-
     def add_expense(self, user_id: int, amount: float, description: str, category: str = "Suscripciones") -> ReceiptModel:
         """Agrega un gasto manual (ej: suscripción)."""
         db_receipt = ReceiptModel(
@@ -360,8 +351,8 @@ class ReceiptRepository:
         self.db.commit()
 
     # --- Métodos de Suscripciones ---
-    def add_subscription(self, user_id: int, name: str, amount: float, day: int):
-        sub = SubscriptionModel(user_id=user_id, name=name, amount=amount, day_of_month=day)
+    def add_subscription(self, user_id: int, name: str, amount: float, day: int, interval: str = "mensual", month_of_year: int = None):
+        sub = SubscriptionModel(user_id=user_id, name=name, amount=amount, day_of_month=day, interval=interval, month_of_year=month_of_year)
         self.db.add(sub)
         self.db.commit()
         return sub
@@ -387,10 +378,25 @@ class ReceiptRepository:
     def get_due_subscriptions(self, day: int):
         """Obtiene suscripciones que deben cobrarse hoy y no han sido procesadas este mes."""
         current_month_str = datetime.now().strftime("%Y-%m")
-        return self.db.query(SubscriptionModel).filter(
+        today = datetime.now()
+        not_processed = (SubscriptionModel.last_processed_month != current_month_str) | (SubscriptionModel.last_processed_month == None)
+
+        # Mensuales: solo verificar día
+        monthly = self.db.query(SubscriptionModel).filter(
+            (SubscriptionModel.interval == "mensual") | (SubscriptionModel.interval == None),
             SubscriptionModel.day_of_month == day,
-            (SubscriptionModel.last_processed_month != current_month_str) | (SubscriptionModel.last_processed_month == None)
+            not_processed
         ).all()
+
+        # Anuales: verificar día Y mes del año
+        annual = self.db.query(SubscriptionModel).filter(
+            SubscriptionModel.interval == "anual",
+            SubscriptionModel.day_of_month == day,
+            SubscriptionModel.month_of_year == today.month,
+            not_processed
+        ).all()
+
+        return monthly + annual
 
     def mark_subscription_processed(self, sub_id: int):
         sub = self.db.query(SubscriptionModel).filter(SubscriptionModel.id == sub_id).first()

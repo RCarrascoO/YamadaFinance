@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from infrastructure.ocr.ocr_service import OCRService
 from infrastructure.database.repository import ReceiptRepository
-from infrastructure.database.db_config import get_db
+from infrastructure.database.db_config import get_db_session
 from interface_adapters.telegram.handlers.common import get_random_phrase, get_random_error_message, generate_lilo_insight
 from interface_adapters.telegram.handlers.budgets import check_budget_alert
 
@@ -41,31 +41,32 @@ async def handle_manual_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
         amount = float(amount_str)
         user_id = update.effective_user.id
         
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        
-        # Guardar como boleta sin imagen
-        receipt = repo.save_receipt(
-            user_id=user_id, 
-            raw_text=f"MANUAL ENTRY: {description}", 
-            image_path=None, 
-            file_hash=f"manual_{uuid.uuid4()}"
-        )
-        
-        # Actualizar monto y descripción (usamos merchant_name como descripción corta)
-        repo.update_total_amount(receipt.id, amount)
-        repo.update_merchant(receipt.id, description)
-        
-        # Intentar adivinar categoría
-        predicted_category = repo.get_most_common_category_for_merchant(description)
-        if predicted_category:
-            repo.update_category(receipt.id, predicted_category)
-            cat_msg = f"Lo puse en **{predicted_category}**."
-            await check_budget_alert(update, context, predicted_category)
-        else:
-            cat_msg = "No supe qué categoría ponerle. ¿Me ayudas?"
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
             
+            # Guardar como boleta sin imagen
+            receipt = repo.save_receipt(
+                user_id=user_id, 
+                raw_text=f"MANUAL ENTRY: {description}", 
+                image_path=None, 
+                file_hash=f"manual_{uuid.uuid4()}"
+            )
+            
+            # Actualizar monto y descripción (usamos merchant_name como descripción corta)
+            repo.update_total_amount(receipt.id, amount)
+            repo.update_merchant(receipt.id, description)
+            
+            # Intentar adivinar categoría
+            predicted_category = repo.get_most_common_category_for_merchant(description)
+            if predicted_category:
+                repo.update_category(receipt.id, predicted_category)
+                cat_msg = f"Lo puse en **{predicted_category}**."
+            else:
+                cat_msg = "No supe qué categoría ponerle. ¿Me ayudas?"
+            receipt_id = receipt.id
+        
+        if predicted_category:
+            await check_budget_alert(update, context, predicted_category)
         success_phrase = get_random_phrase("success")
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
@@ -74,7 +75,7 @@ async def handle_manual_entry(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         
         if not predicted_category:
-            await show_receipt_options(update, context, receipt.id)
+            await show_receipt_options(update, context, receipt_id)
             
         return True
     except Exception as e:
@@ -104,26 +105,33 @@ async def execute_ocr_and_save(file_path: str, file_hash: str, update: Update, c
         
         # Guardar en BD
         user_id = update.effective_user.id
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
+            
+            # Guardar boleta con los datos estructurados
+            receipt = repo.save_receipt(
+                user_id=user_id, 
+                raw_text=raw_text, 
+                image_path=file_path, 
+                file_hash=file_hash,
+                total_amount=total_amount
+            )
+            
+            if merchant:
+                repo.update_merchant(receipt.id, merchant)
+            if category:
+                repo.update_category(receipt.id, category)
+            receipt_id = receipt.id
         
-        # Guardar boleta con los datos estructurados
-        receipt = repo.save_receipt(
-            user_id=user_id, 
-            raw_text=raw_text, 
-            image_path=file_path, 
-            file_hash=file_hash,
-            total_amount=total_amount
-        )
-        
-        if merchant:
-            repo.update_merchant(receipt.id, merchant)
-        if category:
-            repo.update_category(receipt.id, category)
+        # Limpiar archivo temporal (ya procesado y guardado en BD)
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except Exception as e:
+            logging.warning(f"No se pudo eliminar archivo temporal {file_path}: {e}")
         
         # Mostrar opciones de la boleta
-        await show_receipt_options(update, context, receipt.id)
+        await show_receipt_options(update, context, receipt_id)
 
     except Exception as e:
         logging.error(f"Error ejecutando OCR: {e}")
@@ -134,10 +142,9 @@ async def show_receipt_options(update: Update, context: ContextTypes.DEFAULT_TYP
     """Muestra la información de la boleta y los botones de acción."""
     chat_id = update.effective_chat.id
     
-    db_gen = get_db()
-    db = next(db_gen)
-    repo = ReceiptRepository(db)
-    receipt = repo.get_receipt_by_id(receipt_id)
+    with get_db_session() as db:
+        repo = ReceiptRepository(db)
+        receipt = repo.get_receipt_by_id(receipt_id)
     
     if not receipt:
         await context.bot.send_message(chat_id=chat_id, text="❌ Error: No encontré la boleta... ¿se habrá escondido? 👻")
@@ -205,11 +212,11 @@ async def process_file(file_id: str, update: Update, context: ContextTypes.DEFAU
         file_hash = calculate_file_hash(file_path)
         
         # Verificar Duplicados
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
+            is_dup = repo.is_duplicate(user_id, file_hash)
         
-        if repo.is_duplicate(user_id, file_hash):
+        if is_dup:
             # Es duplicado, avisar al usuario y borrar archivo temporal
             if os.path.exists(file_path):
                 os.remove(file_path)
@@ -279,10 +286,9 @@ async def handle_expense_callbacks(update: Update, context: ContextTypes.DEFAULT
     if data.startswith("cancel_receipt_"):
         receipt_id = int(data.split("_")[2])
         
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        repo.delete_receipt(receipt_id)
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
+            repo.delete_receipt(receipt_id)
         
         await query.edit_message_text(text="🗑️ **Boleta eliminada.** No se guardó nada.", parse_mode='Markdown')
         return True
@@ -321,13 +327,10 @@ async def handle_expense_callbacks(update: Update, context: ContextTypes.DEFAULT
         receipt_id = int(parts[1])
         category = parts[2]
         
-        db_gen = get_db()
-        db = next(db_gen)
-        repo = ReceiptRepository(db)
-        repo.update_category(receipt_id, category)
-        
-        # Generar insight
-        insight = generate_lilo_insight(update.effective_user.id, repo)
+        with get_db_session() as db:
+            repo = ReceiptRepository(db)
+            repo.update_category(receipt_id, category)
+            insight = generate_lilo_insight(update.effective_user.id, repo)
         
         # Verificar presupuesto
         await check_budget_alert(update, context, category)
@@ -336,9 +339,6 @@ async def handle_expense_callbacks(update: Update, context: ContextTypes.DEFAULT
             text=f"✅ ¡Listo! Guardado en **{category}**.\n\n💡 **Dato curioso:** {insight}", 
             parse_mode='Markdown'
         )
-        
-        # Volver a mostrar las opciones por si quiere editar algo más
-        await show_receipt_options(update, context, receipt_id)
         return True
         
     return False
