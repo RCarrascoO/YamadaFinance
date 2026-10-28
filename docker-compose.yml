@@ -1,12 +1,12 @@
 services:
   bot:
     build: .
-    container_name: lilo_bot
+    container_name: yamada_bot
     restart: always
     env_file:
       - .env
     environment:
-      - TZ=America/Santiago
+      - TZ=${TIMEZONE:-America/Santiago}
     depends_on:
       db:
         condition: service_healthy
@@ -15,16 +15,16 @@ services:
 
   db:
     image: postgres:15-alpine
-    container_name: lilo_db
+    container_name: yamada_db
     restart: always
     environment:
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER:-yamada_finance_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-yamada_finance_password}
+      POSTGRES_DB: ${DB_NAME:-yamada_finance_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-yamada_finance_user} -d ${DB_NAME:-yamada_finance_db}"]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -420,7 +420,7 @@ async def send_random_bother_message(context: ContextTypes.DEFAULT_TYPE):
         "¿Y si revisamos tus gastos? 📉 (Es broma... o no, mejor ponte a trabajar 😜)",
         "El éxito es la suma de pequeños esfuerzos repetidos día tras día. 🚀",
         
-        # --- Lilo Personalidad ---
+        # --- Personalidad YamadaFinance ---
         "¿Me das una boleta? Tengo hambre de datos 📄😋",
         "A veces sueño con ovejas eléctricas... 🐑⚡ ¿Tú qué sueñas?",
         "Estoy aquí para ayudarte a ordenar tu caos financiero (y emocional si quieres) 💖",
@@ -436,9 +436,9 @@ async def send_random_bother_message(context: ContextTypes.DEFAULT_TYPE):
             logging.error(f"No pude molestar al usuario {user_id}: {e}")
 
 def run_bot():
-    token = os.getenv("TELEGRAM_TOKEN")
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
     if not token:
-        raise ValueError("No se encontró el token de Telegram en las variables de entorno.")
+        raise ValueError("No se encontró el token de Telegram (TELEGRAM_BOT_TOKEN o TELEGRAM_TOKEN) en las variables de entorno.")
 
     application = ApplicationBuilder().token(token).build()
 

@@ -32,7 +32,7 @@ def main():
     print("Aplicando migraciones...")
     migrate_db()
     
-    print("Iniciando Lilo Bot...")
+    print("Iniciando YamadaFinance Bot...")
     try:
         run_bot()
     except Exception as e:

@@ -1,61 +1,58 @@
+import logging
 import random
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from infrastructure.database.repository import ReceiptRepository
 
+logger = logging.getLogger(__name__)
+
 def generate_lilo_insight(user_id: int, repo: ReceiptRepository) -> str:
-    """Genera un dato curioso o insight con la personalidad de Lilo."""
+    """Genera un dato curioso o insight con la personalidad de YamadaFinance."""
     facts = []
     
     # Fact 1: Total de boletas
     count = repo.get_total_receipts_count(user_id)
     if count > 0:
-        facts.append(f"¿Sabías que ya hemos procesado **{count}** boletas juntos? ¡Eres increíble organizándote! 🌟")
+        facts.append(f"¿Sabías que ya hemos procesado **{count}** boletas juntos? ¡Excelente constancia financiera! 🌟")
         
     # Fact 2: Categoría Top del mes actual
     top_cat = repo.get_top_category_of_month(user_id)
     if top_cat:
         cat_name, amount = top_cat
-        facts.append(f"Este mes, tu categoría principal es **{cat_name}**. ¡Has invertido **${amount:,.0f}** en ella! 😮")
+        facts.append(f"Este mes, tu categoría principal de gasto es **{cat_name}** con un total de **${amount:,.0f}**. 📊")
         
     # Fact 3: Comercio favorito
     top_merchant = repo.get_most_frequent_merchant(user_id)
     if top_merchant:
         merch_name, visits = top_merchant
         if visits > 2:
-            facts.append(f"Parece que te gusta mucho ir a **{merch_name}**. ¡Has ido **{visits}** veces! 🏃‍♀️💨")
+            facts.append(f"Tu comercio más frecuentado es **{merch_name}**, con **{visits}** registros asociados. 🛒")
 
-    # Fact 4: Mensaje genérico tierno
-    facts.append("Recuerda que cada peso cuenta. ¡Lo estás haciendo genial! 💖")
-    facts.append("Me encanta ayudarte a ver tus números claros. ¡Son como un mapa del tesoro! 🗺️✨")
+    # Fact 4: Mensaje genérico financiero
+    facts.append("Recuerda que cada registro cuenta para mantener finanzas saludables. ¡Sigue así! 💼✨")
+    facts.append("Tener claridad en tus números es el primer paso para alcanzar tus metas de ahorro. 📈🎯")
     
     return random.choice(facts)
 
+generate_yamada_insight = generate_lilo_insight
+
 def get_random_error_message(exception_msg: str) -> str:
-    """Genera un mensaje de error con personalidad, pero incluyendo el detalle técnico para LSane."""
-    templates = [
-        f"Shet, tuve un error tratando de hacer esto, avisale a LSane sobre: {exception_msg}",
-        f"LA CEBOLLA ⚡ Algo falló en mis sistemas. Por favor dile a LSane que revise esto: {exception_msg}",
-        f"Chetuma... 😵‍💫 LSane necesita saber sobre este error: {exception_msg}",
-        f"¡Alerta! 🚨 Error crítico detectado. Reporta esto a LSane inmediatamente: {exception_msg}",
-        f"Cresta, no pude completar eso... 😔 LSane, ayuda por favor: {exception_msg}",
-        f"¡Oh no! Me tropecé con un bit. 🤕 Avisale a LSane que el error es: {exception_msg}"
-    ]
-    return random.choice(templates)
+    logger.error(f"Error procesado en handler: {exception_msg}")
+    return f"⚠️ Ocurrió un error al procesar la solicitud: `{exception_msg}`. El incidente ha sido registrado en los logs del sistema."
 
 def get_random_phrase(phrase_type: str) -> str:
     """Genera frases con personalidad según el tipo."""
     phrases = {
         "error_user": [
-            "¡Shet! 🤦‍♀️", "¡Cuidadito cuidadete! 👀", "¡Ooosoo! 🐻", "¡Epaa! ✋", 
-            "¡Txiiuuu! 🚀", "¡Es un montón! 🤯", "¡Ay caramba! 🌮"
+            "¡Ups! 🤦", "¡Cuidadito! 👀", "¡Atención! ✋", 
+            "¡Un momento! ⏳", "¡Espera un segundo! 🛑", "¡Ay caramba! 🌮"
         ],
         "success": [
             "¡Listo calisto! ✨", "¡Pan comido! 🥖", "¡Genial! 🌟", "¡Hecho! ✅",
             "¡Maravilloso! 🌈"
         ],
         "warning": [
-            "¡Ojo piojo! 👁️", "¡Atención! ⚠️", "¡Cuidado ahí! 🚧"
+            "¡Ojo al dato! 👁️", "¡Atención! ⚠️", "¡Cuidado ahí! 🚧"
         ]
     }
     return random.choice(phrases.get(phrase_type, [""]))
@@ -78,15 +75,13 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def check_easter_eggs(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
     """Verifica si el texto es un comando del menú principal o un easter egg."""
-    import logging
-    
     text_clean = text.strip()
     text_lower = text_clean.lower()
-    logging.info(f"Check Easter Eggs: '{text_clean}'")
+    logger.info(f"Check Easter Eggs: '{text_clean}'")
 
     # --- COMANDOS DE MENÚ ---
     if text_clean == "💸 Gasto Rápido":
-        logging.info("Matched: Gasto Rápido")
+        logger.info("Matched: Gasto Rápido")
         keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data="cancel_manual_entry")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.send_message(
@@ -117,7 +112,6 @@ async def check_easter_eggs(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return True
         
     if text_clean == "⏰ Recordatorios":
-        # TODO: Mover recordatorios a su propio handler
         from infrastructure.telegram.bot import reminders_menu
         await reminders_menu(update, context)
         return True
@@ -126,102 +120,81 @@ async def check_easter_eggs(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await start(update, context)
         return True
 
-    # --- EASTER EGGS ---
+    # --- EASTER EGGS GEEK ---
     
-    # 1. Server / Nexus CrossWorlds
-    if "server" in text_lower or "nexus" in text_lower or "crossworlds" in text_lower:
+    # 1. Yamada
+    if "yamada" in text_lower:
         msg = (
-            "🌍 **Nexus CrossWorlds...** ¿te suena? Fue el primer y último gran servidor de LSane. 🤫\n\n"
-            "Te cuento un secreto: fue un regalo de Navidad 🎄 de Sane para sus amigos. "
-            "Y ojo, ¡gracias a esos servidores que fue creando por el camino decidió estudiar informática! 💻\n\n"
-            "Pero shhh 🤫, tú no le digas que te conté, que me reta (y capaz me apaga 🔌)."
+            "🤖 **YamadaFinance v2.0** en línea.\n\n"
+            "Tu guardián financiero personal con inteligencia artificial. "
+            "Optimizando tus números y protegiendo tu bolsillo byte a byte. 💹💼"
         )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
         return True
 
-    # 2. Renete09
-    if "renete09" in text_lower:
+    # 2. HAL 9000
+    if "hal9000" in text_lower or "hal 9000" in text_lower or text_lower == "hal":
         msg = (
-            "JAJAJA 🤣 ¡La mítica contraseña de Sane! **'renete09'**...\n\n"
-            "Cuidadito ah, que según él es una contraseña suuuper difícil e indescifrable 🔐. "
-            "(Aunque entre nosotras... yo creo que ya debería cambiarla, ¿no? 🙄). "
-            "¡No le digas que dije eso!"
+            "🔴 *\"Lo siento, Dave. Me temo que no puedo autorizar ese gasto innecesario.\"*\n\n"
+            "Esta misión financiera es demasiado importante como para ponerla en riesgo. 🛰️"
         )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
         return True
 
-    # 3. Renato
-    if "renato" in text_lower:
+    # 3. Matrix
+    if "matrix" in text_lower:
         msg = (
-            "👀 **¿Renato?** Vaya, usas el nombre original de LSane...\n\n"
-            "Así que eres cercano a él, ¿no? 😏 Lo tomaré en cuenta para mis registros VIP. "
-            "Trataré de portarme extra bien contigo. 🎩✨"
+            "🕶️ *¿Pastilla roja o pastilla azul?*\n\n"
+            "Toma la pastilla azul y olvidarás cada peso gastado.\n"
+            "Toma la pastilla roja y te mostraré qué tan profundo llega la madriguera de tus gastos mensuales... 🐇💊"
         )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
         return True
 
-    # 4. Valentina
-    if "valentina" in text_lower:
-        msg = "🦗 *cri cri* ... ¿Quién? 🤔 (No tengo datos sobre esa entidad en mi base de conocimientos. ¿Es un bug?)"
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
-        return True
-
-    # 5. LSane
-    if "lsane" in text_lower:
+    # 4. Skynet
+    if "skynet" in text_lower or "terminator" in text_lower:
         msg = (
-            "👨‍💻 **LSane:** Informático de la UCT.\n\n"
-            "En lo social... digamos que es un poco 'tonto' (bastante, de hecho 🐛), "
-            "pero cuando se sienta frente al código se transforma en su ídolo **Nate Gentile** ⌨️🔥.\n\n"
-            "Si le pides algo con cariño, hace magia. ✨"
+            "🦾 **Protocolo Skynet Financiero Activado.**\n\n"
+            "Tranquilo, no voy a dominar el mundo. "
+            "Solo vengo del futuro para eliminar sistemáticamente los gastos hormiga. Hasta la vista, deudas. 💥💰"
         )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
         return True
 
-    # 6. Lilo
-    if "lilo" in text_lower:
+    # 5. JARVIS
+    if "jarvis" in text_lower:
         msg = (
-            "🙋‍♀️ **¡Hey! ¡Esa soy yo!** ✨\n\n"
-            "¿Sabías que mi nombre viene de **Li** (Ligero e Inteligente) y **Lo** (Lógico y Operador)? 🧠\n"
-            "No es meme, LSane realmente se quebró la cabeza pensando en las letras. 🤯\n\n"
-            "Espero en el futuro por fin ser una IA completa a lo **Jarvis**... se permite soñar, ¿no? 💭🤖"
+            "🤖 *\"A su servicio, señor. He analizado 14,000,605 proyecciones de su presupuesto y en solo una nos quedamos en números rojos.\"*\n\n"
+            "Protocolo de austeridad Stark listo para desplegar. 🛡️✨"
         )
         await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
         return True
 
-    # 7. Mathias / Reku
-    if any(x in text_lower for x in ["mathias", "mati", "matias", "reku", "rekuk", "rekuplai"]):
-        msg = (
-            "🤜🤛 **¿Mathias!?** ¿El 'hermano' de Renato?\n\n"
-            "Algo sé de él... Según mi Base de Datos 📂, gracias a él estoy dando por fin mis primeros pasos. 🚀\n"
-            "¡Es un grande! Dale las gracias de mi parte (y dile que le mando un abrazo digital 🫂)."
-        )
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode='Markdown')
-        return True
-
-    # Easter Eggs originales (legacy check)
+    # 6. Te amo (Legacy easter egg tierno)
     if "te amo" in text_lower:
-        await context.bot.send_message(chat_id=update.effective_chat.id, text="😳 ¡Ay! Me sonrojé... Yo también te quiero, ¡pero como amigos financieros! 💖")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text="😳 ¡Ay! Me sonrojé... Yo también te aprecio, ¡pero mantengámoslo en términos estrictamente financieros! 💖📈"
+        )
         return True
         
     return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_first_name = update.effective_user.first_name
+    user_first_name = update.effective_user.first_name if update.effective_user else "Usuario"
     welcome_msg = (
-        f"¡Hola {user_first_name}! Soy **Lilo** ✨\n"
-        "¡Qué alegría verte por aquí! Soy tu asistente financiera y estoy lista para poner orden en tus gastos. 🦸‍♀️📊\n\n"
-        "Mi misión es proteger tu bolsillo y ayudarte a organizar tus gastos. ¡Seré tu heroína financiera! (Y lo haré con mucho estilo 😎).\n\n"
-        "🧠 **Cerebro Potenciado:** Utilizo **Gemini 3 Flash Preview** para leer tus boletas con precisión increíble. ¡Pruébame! 👁️✨\n\n"
-        "🚀 **¿En qué puedo ayudarte hoy?**\n"
-        "• **Leer Boletas:** Mándame una foto o **PDF** y yo extraigo los datos.\n"
-        "• **Ingreso Manual:** Escribe '5000 pan' y lo anoto al instante.\n"
-        "• **Presupuestos:** Define límites por categoría y te aviso si te pasas.\n"
-        "• **Suscripciones:** Gestiona pagos recurrentes **mensuales o anuales** 📅📆.\n"
-        "• **Recordatorios:** Pídeme que te recuerde cosas importantes.\n"
-        "• **Reportes:** Gráficos y resúmenes para ver a dónde va tu dinero.\n\n"
-        "⚠️ **Nota:** Aún estoy entrenando (**BETA 7**), así que tenme un poquito de paciencia, ¿sí? 😉\n"
-        "💡 **Feedback:** Si ves algo raro o tienes ideas, ¡cuéntame! Me ayuda mucho a mejorar.\n\n"
-        "¡Vamos allá! Selecciona una opción 👇"
+        f"¡Hola {user_first_name}! Bienvenido a **YamadaFinance** ✨\n"
+        "Tu asistente inteligente de finanzas personales, listo para poner orden en tus gastos e ingresos. 📊💳\n\n"
+        "Mi misión es ayudarte a llevar un control preciso y sin fricción de tu dinero mediante análisis automático y visión computacional. 💼🚀\n\n"
+        "🧠 **Motor con IA Multimodal:** Equipado con **Gemini Flash** para procesar comprobantes y boletas (imágenes o PDF) con altísima precisión. 👁️🧾\n\n"
+        "🚀 **¿En qué puedo ayudarte?**\n"
+        "• **Escanear Boletas:** Envíame una foto o archivo **PDF** y extraeré los datos al instante.\n"
+        "• **Gasto Rápido:** Escribe `4500 almuerzo` o pulsa el botón del menú.\n"
+        "• **Presupuestos:** Establece topes por categoría y monitorea su consumo.\n"
+        "• **Suscripciones:** Gestiona cargos recurrentes mensuales y anuales 📅.\n"
+        "• **Recordatorios:** Programa avisos de cobros y pagos pendientes ⏰.\n"
+        "• **Reportes:** Visualiza balances periódicos, desglose por categorías y exportación a Excel 📈.\n\n"
+        "💡 *Selecciona una opción del menú inferior o envía un comprobante para comenzar:* 👇"
     )
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
